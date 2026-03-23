@@ -47,18 +47,57 @@ class VideoLauncher extends Plugin {
     @PluginMethod
     public void getList(PluginCall call) {
         try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(Uri.parse("file:///dummy.mp4"), "video/*");
-            
             PackageManager pm = getContext().getPackageManager();
-            List<ResolveInfo> resInfo = pm.queryIntentActivities(intent, 0);
-            
             List<JSObject> players = new ArrayList<>();
+            
+            // Method 1: Query Intent (Automatic)
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.parse("content://dummy.mp4"), "video/*");
+            List<ResolveInfo> resInfo = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL);
+            
             for (ResolveInfo ri : resInfo) {
-                JSObject player = new JSObject();
-                player.put("name", ri.loadLabel(pm).toString());
-                player.put("packageId", ri.activityInfo.packageName);
-                players.add(player);
+                String pkg = ri.activityInfo.packageName;
+                if (!pkg.equals(getContext().getPackageName())) {
+                    JSObject player = new JSObject();
+                    player.put("name", ri.loadLabel(pm).toString());
+                    player.put("packageId", pkg);
+                    players.add(player);
+                }
+            }
+
+            // Method 2: Manual Check for well-known players (Fallback)
+            String[][] commonPlayers = {
+                {"VLC", "org.videolan.vlc"},
+                {"MX Player", "com.mxtech.videoplayer.ad"},
+                {"MX Player Pro", "com.mxtech.videoplayer.pro"},
+                {"Nova Player", "org.courville.nova"},
+                {"Kodi", "org.xbmc.kodi"},
+                {"KMPlayer", "com.kmplayer"},
+                {"BSPlayer", "com.bsplayer.bspandroid.free"}
+            };
+
+            for (String[] config : commonPlayers) {
+                String name = config[0];
+                String pkg = config[1];
+                
+                // Avoid duplicates
+                boolean exists = false;
+                for (JSObject p : players) {
+                    if (p.getString("packageId").equals(pkg)) {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists) {
+                    try {
+                        pm.getPackageInfo(pkg, 0);
+                        JSObject player = new JSObject();
+                        player.put("name", name);
+                        player.put("packageId", pkg);
+                        players.add(player);
+                    } catch (PackageManager.NameNotFoundException ignored) {}
+                }
             }
             
             JSObject response = new JSObject();
