@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.provider.Settings;
 import android.os.Bundle;
+import android.util.Log;
 import java.io.File;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.JSObject;
@@ -22,6 +23,7 @@ import java.util.List;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(VideoLauncher.class);
         super.onCreate(savedInstanceState);
         
         // Request MANAGE_EXTERNAL_STORAGE automatically on startup
@@ -49,12 +51,14 @@ class VideoLauncher extends Plugin {
         try {
             PackageManager pm = getContext().getPackageManager();
             List<JSObject> players = new ArrayList<>();
+            Log.d("LocalStream", "Scanning for video players...");
             
             // Method 1: Query Intent (Automatic)
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(Uri.parse("content://dummy.mp4"), "video/*");
             List<ResolveInfo> resInfo = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL);
             
+            Log.d("LocalStream", "Found " + resInfo.size() + " players via intent");
             for (ResolveInfo ri : resInfo) {
                 String pkg = ri.activityInfo.packageName;
                 if (!pkg.equals(getContext().getPackageName())) {
@@ -62,6 +66,7 @@ class VideoLauncher extends Plugin {
                     player.put("name", ri.loadLabel(pm).toString());
                     player.put("packageId", pkg);
                     players.add(player);
+                    Log.d("LocalStream", "Player found: " + ri.loadLabel(pm).toString() + " (" + pkg + ")");
                 }
             }
 
@@ -96,10 +101,12 @@ class VideoLauncher extends Plugin {
                         player.put("name", name);
                         player.put("packageId", pkg);
                         players.add(player);
-                    } catch (PackageManager.NameNotFoundException ignored) {}
+                        Log.d("LocalStream", "Manual check found: " + name + " (" + pkg + ")");
+                    } catch (Exception ignored) {}
                 }
             }
             
+            Log.d("LocalStream", "Total players listed: " + players.size());
             JSObject response = new JSObject();
             response.put("players", players);
             call.resolve(response);
