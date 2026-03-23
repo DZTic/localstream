@@ -19,6 +19,8 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import java.util.ArrayList;
 import java.util.List;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -50,7 +52,7 @@ class VideoLauncher extends Plugin {
     public void getList(PluginCall call) {
         try {
             PackageManager pm = getContext().getPackageManager();
-            List<JSObject> players = new ArrayList<>();
+            JSONArray playersArray = new JSONArray();
             Log.d("LocalStream", "Scanning for video players...");
             
             // Method 1: Query Intent (Automatic)
@@ -58,14 +60,16 @@ class VideoLauncher extends Plugin {
             intent.setDataAndType(Uri.parse("content://dummy.mp4"), "video/*");
             List<ResolveInfo> resInfo = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL);
             
+            List<String> seenPackages = new ArrayList<>();
             Log.d("LocalStream", "Found " + resInfo.size() + " players via intent");
             for (ResolveInfo ri : resInfo) {
                 String pkg = ri.activityInfo.packageName;
-                if (!pkg.equals(getContext().getPackageName())) {
-                    JSObject player = new JSObject();
+                if (!pkg.equals(getContext().getPackageName()) && !seenPackages.contains(pkg)) {
+                    JSONObject player = new JSONObject();
                     player.put("name", ri.loadLabel(pm).toString());
                     player.put("packageId", pkg);
-                    players.add(player);
+                    playersArray.put(player);
+                    seenPackages.add(pkg);
                     Log.d("LocalStream", "Player found: " + ri.loadLabel(pm).toString() + " (" + pkg + ")");
                 }
             }
@@ -84,33 +88,25 @@ class VideoLauncher extends Plugin {
             for (String[] config : commonPlayers) {
                 String name = config[0];
                 String pkg = config[1];
-                
-                // Avoid duplicates
-                boolean exists = false;
-                for (JSObject p : players) {
-                    if (p.getString("packageId").equals(pkg)) {
-                        exists = true;
-                        break;
-                    }
-                }
-
-                if (!exists) {
+                if (!seenPackages.contains(pkg)) {
                     try {
                         pm.getPackageInfo(pkg, 0);
-                        JSObject player = new JSObject();
+                        JSONObject player = new JSONObject();
                         player.put("name", name);
                         player.put("packageId", pkg);
-                        players.add(player);
+                        playersArray.put(player);
+                        seenPackages.add(pkg);
                         Log.d("LocalStream", "Manual check found: " + name + " (" + pkg + ")");
                     } catch (Exception ignored) {}
                 }
             }
             
-            Log.d("LocalStream", "Total players listed: " + players.size());
+            Log.d("LocalStream", "Total players listed: " + playersArray.length());
             JSObject response = new JSObject();
-            response.put("players", players);
+            response.put("players", playersArray);
             call.resolve(response);
         } catch (Exception e) {
+            Log.d("LocalStream", "Error in getList: " + e.getMessage());
             call.reject("Error listing players: " + e.getMessage());
         }
     }
