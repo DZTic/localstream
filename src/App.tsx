@@ -528,10 +528,12 @@ export default function App() {
 
   const groupedVideos = React.useMemo(() => {
     const groups: Record<string, VideoFile> = {};
-    const result: VideoFile[] = [];
+    const standaloneVideos: VideoFile[] = [];
 
     videos.forEach(video => {
-      const isSeries = video.seriesName || video.name.toLowerCase().match(/s\d{2}|episode|saison/);
+      // Un épisode est identifié s'il a un nom de série (déjà extrait au scan) ou s'il match un pattern S01E01
+      const isSeries = video.seriesName || video.name.toLowerCase().match(/[sS]\d+(\s*)?([eE]\d+)?|(\d+)(\s*)?x(\d+)/);
+      
       if (isSeries) {
         const sName = video.seriesName || getCleanTitle(video.name);
         if (!groups[sName]) {
@@ -545,31 +547,32 @@ export default function App() {
             episodes: [],
             seriesName: sName
           };
-          result.push(groups[sName]);
         }
         groups[sName].episodes!.push(video);
       } else {
-        result.push(video);
+        standaloneVideos.push(video);
       }
     });
 
-    Object.values(groups).forEach(group => {
+    const seriesResult = Object.values(groups).map(group => {
       if (group.episodes) {
         group.episodes.sort((a, b) => {
           if (a.season !== b.season) return (a.season || 0) - (b.season || 0);
           return (a.episode || 0) - (b.episode || 0);
         });
-        if (group.episodes.length > 0) {
-          group.file = group.episodes[0].file;
-          group.size = group.episodes[0].size;
-          group.lastModified = group.episodes[0].lastModified;
-          group.url = group.episodes[0].url;
-          group.path = group.episodes[0].path;
-        }
+        
+        // On prend les métadonnées de la série à partir du premier épisode
+        const firstEp = group.episodes[0];
+        group.file = firstEp.file;
+        group.size = firstEp.size;
+        group.lastModified = firstEp.lastModified;
+        group.url = firstEp.url;
+        group.path = firstEp.path;
       }
+      return group;
     });
 
-    return result;
+    return [...seriesResult, ...standaloneVideos];
   }, [videos]);
 
   const tvShows = groupedVideos.filter(v => v.isSeriesGroup);
