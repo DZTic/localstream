@@ -173,11 +173,11 @@ export default function App() {
 
   const getCleanTitle = (filename: string) => {
     let title = filename.replace(/\.[^/.]+$/, "");
-    title = title.replace(/[sS]\d{2}[eE]\d{2}.*/, "");
+    title = title.replace(/[sS]\d+(\s*)?([eE]\d+)?|(\d+)(\s*)?x(\d+).*/i, "");
     title = title.replace(/(19|20)\d{2}.*/, "");
     title = title.replace(/[\.\-_]/g, " ");
     title = title.replace(/1080p|720p|2160p|4k|bluray|webrip|hdtv|x264|x265|hevc|vostfr|french|truefrench/ig, "");
-    return title.trim();
+    return title.trim().replace(/\s+$/, "");
   };
 
   useEffect(() => {
@@ -290,11 +290,11 @@ export default function App() {
           result = result.concat(subFiles);
         } else if (file.type === 'file' && (file.name.match(/\.(mp4|mkv|webm|avi|mov)$/i))) {
           let seriesName, season, episode;
-          const match = file.name.match(/[sS](\d+)[eE](\d+)|(\d+)x(\d+)/);
+          const match = file.name.match(/[sS](\d+)(\s*)[eE](\d+)|(\d+)(\s*)x(\d+)/i);
           if (match) {
-            season = parseInt(match[1] || match[3], 10);
-            episode = parseInt(match[2] || match[4], 10);
-            seriesName = file.name.substring(0, match.index).replace(/[\.\-_]/g, " ").trim();
+            season = parseInt(match[1] || match[4], 10);
+            episode = parseInt(match[3] || match[6], 10);
+            seriesName = file.name.substring(0, match.index).replace(/[\.\-_]/g, " ").trim().replace(/\s+$/, "");
             if (!seriesName) seriesName = "Série Inconnue";
           }
           
@@ -361,11 +361,11 @@ export default function App() {
       const file = files[i];
       if (file.type.startsWith('video/') || file.name.match(/\.(mp4|mkv|webm|avi|mov)$/i)) {
         let seriesName, season, episode;
-        const match = file.name.match(/[sS](\d+)[eE](\d+)|(\d+)x(\d+)/);
+        const match = file.name.match(/[sS](\d+)(\s*)[eE](\d+)|(\d+)(\s*)x(\d+)/i);
         if (match) {
-          season = parseInt(match[1] || match[3], 10);
-          episode = parseInt(match[2] || match[4], 10);
-          seriesName = file.name.substring(0, match.index).replace(/[\.\-_]/g, " ").trim();
+          season = parseInt(match[1] || match[4], 10);
+          episode = parseInt(match[3] || match[6], 10);
+          seriesName = file.name.substring(0, match.index).replace(/[\.\-_]/g, " ").trim().replace(/\s+$/, "");
           if (!seriesName) seriesName = "Série Inconnue";
         }
 
