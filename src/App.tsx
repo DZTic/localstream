@@ -198,14 +198,9 @@ export default function App() {
         if (!cleanTitle) continue;
 
         try {
-          const res = await fetch(`/api/os/proxy`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              url: `https://api.themoviedb.org/3/search/multi?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`,
-              method: 'GET'
-            })
-          });
+          // Direct fetch for TMDB (works better on mobile/capacitor)
+          const url = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`;
+          const res = await fetch(url);
           const data = await res.json();
           
           if (data.results && data.results.length > 0) {
