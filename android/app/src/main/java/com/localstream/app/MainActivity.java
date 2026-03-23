@@ -14,6 +14,10 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -41,8 +45,35 @@ public class MainActivity extends BridgeActivity {
 @CapacitorPlugin(name = "VideoLauncher")
 class VideoLauncher extends Plugin {
     @PluginMethod
+    public void getList(PluginCall call) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.parse("file:///dummy.mp4"), "video/*");
+            
+            PackageManager pm = getContext().getPackageManager();
+            List<ResolveInfo> resInfo = pm.queryIntentActivities(intent, 0);
+            
+            List<JSObject> players = new ArrayList<>();
+            for (ResolveInfo ri : resInfo) {
+                JSObject player = new JSObject();
+                player.put("name", ri.loadLabel(pm).toString());
+                player.put("packageId", ri.activityInfo.packageName);
+                players.add(player);
+            }
+            
+            JSObject response = new JSObject();
+            response.put("players", players);
+            call.resolve(response);
+        } catch (Exception e) {
+            call.reject("Error listing players: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
     public void openVideo(PluginCall call) {
         String filePath = call.getString("path");
+        String packageId = call.getString("packageId");
+
         if (filePath == null) {
             call.reject("Path is missing");
             return;
@@ -71,7 +102,12 @@ class VideoLauncher extends Plugin {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             
-            getContext().startActivity(Intent.createChooser(intent, "Ouvrir avec..."));
+            if (packageId != null && !packageId.isEmpty()) {
+                intent.setPackage(packageId);
+                getContext().startActivity(intent);
+            } else {
+                getContext().startActivity(Intent.createChooser(intent, "Ouvrir avec..."));
+            }
             call.resolve();
         } catch (Exception e) {
             call.reject("Error opening video: " + e.getMessage());
