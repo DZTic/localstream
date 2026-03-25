@@ -19,4 +19,14 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+
+    <style name="CustomDialogTheme" parent="Theme.AppCompat.DayNight.Dialog.Alert">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:background">#09090b</item>
+        <item name="android:textColorPrimary">#ffffff</item>
+        <item name="android:textColorSecondary">#a1a1aa</item>
+        <item name="colorAccent">#dc2626</item>
+        <item name="android:colorAccent">#dc2626</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
 </resources>

@@ -26,6 +26,13 @@
 
         </activity>
 
+        <activity
+            android:name=".PlayerActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:screenOrientation="sensorLandscape"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -51,9 +58,16 @@
             <data android:mimeType="video/*" />
         </intent>
         <package android:name="org.videolan.vlc" />
+        <package android:name="org.videolan.vlc.debug" />
         <package android:name="com.mxtech.videoplayer.ad" />
         <package android:name="com.mxtech.videoplayer.pro" />
         <package android:name="org.courville.nova" />
         <package android:name="org.xbmc.kodi" />
+        <package android:name="com.kmplayer" />
+        <package android:name="com.bsplayer.bspandroid.free" />
+        <package android:name="com.inshot.videoplayer" />
+        <package android:name="com.videoplayer.videoplayer.movieplayer.allformat" />
+        <package android:name="com.olimsoft.android.oplayer.free" />
+        <package android:name="me.abitno.vplayer.t" />
     </queries>
 </manifest>

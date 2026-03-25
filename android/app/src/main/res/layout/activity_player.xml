@@ -1,0 +1,62 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        app:show_subtitle_button="true"
+        app:show_shuffle_button="false"
+        app:show_next_button="true"
+        app:show_previous_button="true"
+        app:show_fastforward_button="true"
+        app:show_rewind_button="true"
+        app:played_color="#dc2626"
+        app:scrubber_color="#dc2626"
+        app:unplayed_color="#3f3f46"
+        app:buffered_color="#71717a" />
+
+    <LinearLayout
+        android:id="@+id/gesture_feedback_layout"
+        android:layout_width="120dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:padding="20dp"
+        android:background="@drawable/rounded_bg_dark"
+        android:visibility="gone"
+        android:alpha="0"
+        android:elevation="10dp">
+        
+        <ImageView
+            android:id="@+id/gesture_feedback_icon"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:src="@android:drawable/ic_lock_silent_mode_off"/>
+
+        <ProgressBar
+            android:id="@+id/gesture_feedback_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="6dp"
+            android:layout_marginTop="12dp"
+            android:progressDrawable="@drawable/custom_progress_drawable"
+            android:max="100"/>
+        
+        <TextView
+            android:id="@+id/gesture_feedback_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="center"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:layout_marginTop="4dp"
+            android:text="100%"/>
+    </LinearLayout>
+
+</FrameLayout>

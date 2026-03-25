@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Android
+android/build/
+android/.gradle/
+android/.idea/
+android/local.properties
+android/app/build/
+android/app/src/main/assets/public/
