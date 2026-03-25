@@ -7,6 +7,9 @@ coverage/
 .env*
 !.env.example
 
+# Fichiers internes des outils IA
+metadata.json
+
 # IDEs
 .idea/
 .vscode/
@@ -20,3 +23,4 @@ android/.idea/
 android/local.properties
 android/app/build/
 android/app/src/main/assets/public/
+android/.kotlin/

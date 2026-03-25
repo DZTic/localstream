@@ -1,5 +1,0 @@
-{
-  "name": "LocalStream",
-  "description": "Un site de streaming pour téléphone qui lit les fichiers locaux et cherche des sous-titres sur OpenSubtitles.",
-  "requestFramePermissions": []
-}

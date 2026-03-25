@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, RotateCcw, RotateCw, Pause, Clock } from 'lucide-react';
+import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, RotateCcw, RotateCw, Pause, Clock, Plus } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
@@ -31,6 +31,8 @@ interface VideoFile {
   type: string;
   path: string;
   nativeUri?: string;
+  subtitleNativePath?: string; // sous-titre auto-détecté (Android)
+  subtitleUrl?: string;        // sous-titre auto-détecté (web, blob URL)
   seriesName?: string;
   season?: number;
   episode?: number;
@@ -58,6 +60,78 @@ const TMDB_GENRES: Record<number, string> = {
   10759: "Action & Adventure", 10762: "Kids", 10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics"
 };
 
+// Convertit un fichier SRT en VTT
+const srt2vtt = (srt: string): string => {
+  let vtt = 'WEBVTT\n\n';
+  vtt += srt
+    .replace(/\{\\([ibu])\}/g, '<$1>')
+    .replace(/\{\\\/([ibu])\}/g, '</$1>')
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
+    .replace(/\r\n/g, '\n');
+  return vtt;
+};
+
+/**
+ * Détecte si un fichier vidéo est une vidéo personnelle (souvenir, caméra téléphone, etc.)
+ * basé uniquement sur le nom du fichier et son chemin.
+ */
+const isPersonalVideo = (name: string, path: string): boolean => {
+  const n = name.toLowerCase();
+  const p = (path || '').toLowerCase().replace(/\\/g, '/');
+
+  // --- Patterns de chemins suspects ---
+  const suspectPaths = [
+    '/dcim/',
+    '/camera/',
+    '/whatsapp/',
+    '/snapchat/',
+    '/instagram/',
+    '/telegram/',
+    '/signal/',
+    '/viber/',
+    '/messenger/',
+    '/tiktok/',
+    '/recordings/',
+    '/screenrecord',
+    '/screen_record',
+    '/voicememos/',
+  ];
+  if (suspectPaths.some(sp => p.includes(sp))) return true;
+
+  // --- Patterns de noms de fichiers phones/caméscopes ---
+  const personalPatterns = [
+    // Android caméra standard : VID_20240315_143022
+    /^vid_\d{8}_\d{6}/,
+    // Android : 20240315_143022
+    /^\d{8}_\d{6}/,
+    // Android : 2024-03-15-14-30-22
+    /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}/,
+    // iPhone photo/vidéo : IMG_1234 ou MOV_1234 (sans titre, juste numéro)
+    /^(img|mov|dsc|dscn|dscf|mvc|mvc|sdc|vlc)_?\d{4,}/i,
+    // Caméscope Sony/Panasonic : C0001, M2U00001
+    /^(c|m2u|avchd|mts|m2ts)\d{4,}/i,
+    // GoPro
+    /^(gh|gx|gopr|gp)\d{4,}/i,
+    // DJI drone
+    /^dji_\d{4}/i,
+    // WhatsApp
+    /^whatsapp.*(video|vidéo|audio)/i,
+    // Snapchat
+    /^snapchat-\d+/i,
+    // Fichier purement numérique (aucune lettre hors extension)
+    /^\d+\.(mp4|mkv|avi|mov|webm)$/i,
+    // Format date ISO ou slash sans titre : 2024-03-15 14.30.22
+    /^\d{4}[-_.\s]\d{2}[-_.\s]\d{2}[\s_-]\d{2}[.:_]\d{2}/,
+    // Screen recording Android/Samsung
+    /^screen.?record/i,
+    // Format caméra sécurité / timelapse
+    /^\d{14}\.(mp4|avi|mkv)$/i,
+  ];
+
+  return personalPatterns.some(pattern => pattern.test(n));
+};
+
+
 export default function App() {
   const [videos, setVideos] = useState<VideoFile[]>([]);
   const [currentVideo, setCurrentVideo] = useState<VideoFile | null>(null);
@@ -72,6 +146,22 @@ export default function App() {
   
   // Settings
   const [videoPlayer, setVideoPlayer] = useState<'internal' | 'external'>(localStorage.getItem('videoPlayer') as any || 'internal');
+  // Vidéos personnelles manuellement incluses (whitelist)
+  const [whitelistedVideos, setWhitelistedVideos] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('whitelistedVideos');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
+  const toggleWhitelist = (name: string) => {
+    setWhitelistedVideos(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      localStorage.setItem('whitelistedVideos', JSON.stringify([...next]));
+      return next;
+    });
+  };
+
   
   // TMDB Credentials & Posters
   const [watchedVideos, setWatchedVideos] = useState<Record<string, boolean>>(() => {
@@ -183,6 +273,13 @@ export default function App() {
   const [tmdbIds, setTmdbIds] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem('tmdbIds');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+  // movieCollections: videoName -> { id: collectionTmdbId, name: collectionName }
+  const [movieCollections, setMovieCollections] = useState<Record<string, { id: number; name: string }>>(() => {
+    try {
+      const saved = localStorage.getItem('movieCollections');
       return saved ? JSON.parse(saved) : {};
     } catch { return {}; }
   });
@@ -343,7 +440,8 @@ export default function App() {
     localStorage.setItem('episodeOverviews', JSON.stringify(episodeOverviews));
     localStorage.setItem('episodePosters', JSON.stringify(episodePosters));
     localStorage.setItem('episodeNames', JSON.stringify(episodeNames));
-  }, [osApiKey, osUsername, osPassword, osToken, videoPlayer, tmdbIds, episodeOverviews, episodePosters, episodeNames]);
+    localStorage.setItem('movieCollections', JSON.stringify(movieCollections));
+  }, [osApiKey, osUsername, osPassword, osToken, videoPlayer, tmdbIds, episodeOverviews, episodePosters, episodeNames, movieCollections]);
 
   useEffect(() => {
     localStorage.setItem('tmdbApiKey', tmdbApiKey);
@@ -401,6 +499,15 @@ export default function App() {
     };
   }, []);
 
+  const [isSynopsisExpanded, setIsSynopsisExpanded] = useState(false);
+  const [isEpisodeSynopsisExpanded, setIsEpisodeSynopsisExpanded] = useState(false);
+
+  useEffect(() => {
+    // Reset expansion when changing video or episode
+    setIsSynopsisExpanded(false);
+    setIsEpisodeSynopsisExpanded(false);
+  }, [infoVideo, expandedEpisode]);
+
   useEffect(() => {
     localStorage.setItem('moviePosters', JSON.stringify(posters));
     localStorage.setItem('movieBackdrops', JSON.stringify(backdrops));
@@ -418,14 +525,20 @@ export default function App() {
     title = title.replace(/(19|20)\d{2}.*/, "");
     title = title.replace(/[\.\-_]/g, " ");
     title = title.replace(/1080p|720p|2160p|4k|bluray|webrip|hdtv|x264|x265|hevc|vostfr|french|truefrench/ig, "");
-    return title.trim().replace(/[\s\-\.]+$/, "").trim();
+    // Supprimer les parenthèses ou crochets orphelins à la fin après nettoyage de l'année
+    return title.trim().replace(/[\(\[\{]\s*$/, "").replace(/[\s\-\.\(\)\[\]\{\}]+$/, "").trim();
   };
 
   const groupedVideos = React.useMemo(() => {
     const groups: Record<string, VideoFile> = {};
     const standaloneVideos: VideoFile[] = [];
 
-    videos.forEach(video => {
+    // Filtrer les vidéos personnelles (sauf celles whitelistées)
+    const filteredVideos = videos.filter(video =>
+      whitelistedVideos.has(video.name) || !isPersonalVideo(video.name, video.path || '')
+    );
+
+    filteredVideos.forEach(video => {
       const match = video.name.match(/[sS](\d+)(\s*)[eE](\d+)|(\d+)(\s*)x(\d+)/i);
       const isSeriesPattern = !!match;
       
@@ -475,25 +588,43 @@ export default function App() {
       return group;
     });
 
-    // Groupement des films par similitude de titre (Ex: John Wick 1, 2, 3)
-    const movieGroups: Record<string, VideoFile[]> = {};
-    const finalStandalone: VideoFile[] = [];
+    // Groupement des films en sagas via les collections TMDB
+    const collectionGroups: Record<string, { colName: string; films: VideoFile[] }> = {};
     const usedVideoNames = new Set<string>();
+    const finalStandalone: VideoFile[] = [];
 
-    const potentialMovieGroups: Record<string, VideoFile[]> = {};
     standaloneVideos.forEach(v => {
-      const baseTitle = v.cleanTitle!.replace(/\s+(Part|Partie|CD|Disk|Vol|Volume|Film|Movie|Suite)\s*\d+.*$/i, "").trim();
-      if (baseTitle.length < 3) return; // Éviter les groupements sur des titres trop courts
-      if (!potentialMovieGroups[baseTitle]) potentialMovieGroups[baseTitle] = [];
-      potentialMovieGroups[baseTitle].push(v);
+      const col = movieCollections[v.name];
+      if (col) {
+        const key = `col_${col.id}`;
+        if (!collectionGroups[key]) collectionGroups[key] = { colName: col.name, films: [] };
+        collectionGroups[key].films.push(v);
+        usedVideoNames.add(v.name);
+      }
     });
 
-    Object.entries(potentialMovieGroups).forEach(([base, eps]) => {
-      if (eps.length > 1) {
-        eps.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-        const first = eps[0];
-        movieGroups[base] = eps;
-        eps.forEach(e => usedVideoNames.add(e.name));
+    // Ne créer un groupe saga que s'il y a au moins 2 films locaux dans la collection
+    const groupedMovies: VideoFile[] = [];
+    Object.values(collectionGroups).forEach(({ colName, films }) => {
+      if (films.length > 1) {
+        films.sort((a, b) => {
+          const dA = releaseDates[a.name] || '';
+          const dB = releaseDates[b.name] || '';
+          return dA.localeCompare(dB) || a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
+        const first = films[0];
+        groupedMovies.push({
+          ...first,
+          name: colName,
+          type: 'series',
+          isSeriesGroup: true,
+          isTvSeries: false,
+          episodes: films,
+          seriesName: colName
+        } as VideoFile);
+      } else {
+        // 1 seul film local dans la collection → laisser en standalone
+        films.forEach(f => usedVideoNames.delete(f.name));
       }
     });
 
@@ -503,21 +634,8 @@ export default function App() {
       }
     });
 
-    const groupedMovies = Object.entries(movieGroups).map(([name, episodes]) => {
-      const first = episodes[0];
-      return {
-        ...first,
-        name: name,
-        type: 'series',
-        isSeriesGroup: true,
-        isTvSeries: false,
-        episodes: episodes,
-        seriesName: name
-      } as VideoFile;
-    });
-
     return [...seriesResult, ...groupedMovies, ...finalStandalone];
-  }, [videos]);
+  }, [videos, movieCollections, releaseDates, whitelistedVideos]);
 
   useEffect(() => {
     const fetchAllMetadata = async () => {
@@ -538,6 +656,26 @@ export default function App() {
 
         if (!posters[lookupName] && cleanTitle) {
           try {
+            // Cas spécial : groupe saga → utiliser l'API /collection/{id} directement
+            if (video.isSeriesGroup && !video.isTvSeries && video.episodes && video.episodes.length > 0) {
+              // Récupérer l'ID de collection depuis le premier film de la saga
+              const firstFilmCol = video.episodes
+                .map(ep => movieCollections[ep.name])
+                .find(col => !!col);
+
+              if (firstFilmCol?.id) {
+                const colUrl = `https://api.themoviedb.org/3/collection/${firstFilmCol.id}?api_key=${tmdbApiKey}&language=fr-FR`;
+                const colRes = await fetch(colUrl);
+                const colData = await colRes.json();
+
+                if (colData.id) {
+                  if (colData.poster_path) setPosters(prev => ({ ...prev, [lookupName]: `https://image.tmdb.org/t/p/w500${colData.poster_path}` }));
+                  if (colData.backdrop_path) setBackdrops(prev => ({ ...prev, [lookupName]: `https://image.tmdb.org/t/p/original${colData.backdrop_path}` }));
+                  if (colData.overview) setOverviews(prev => ({ ...prev, [lookupName]: colData.overview }));
+                  addLog(`Saga poster récupéré : ${lookupName}`);
+                }
+              }
+            } else {
             const url = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`;
             const res = await fetch(url);
             const data = await res.json();
@@ -581,17 +719,39 @@ export default function App() {
                 if (updates.genres) setVideoGenres(prev => ({ ...prev, [lookupName]: updates.genres }));
                 if (updates.tmdbId) setTmdbIds(prev => ({ ...prev, [lookupName]: updates.tmdbId }));
                 addLog(`Trouvé : ${cleanTitle}`);
+
+                // Phase 1b : Récupérer la collection TMDB pour les films standalone
+                if (!video.isSeriesGroup && result.media_type === 'movie' && result.id && !movieCollections[lookupName]) {
+                  try {
+                    const movieDetailUrl = `https://api.themoviedb.org/3/movie/${result.id}?api_key=${tmdbApiKey}&language=fr-FR`;
+                    const mRes = await fetch(movieDetailUrl);
+                    const mData = await mRes.json();
+                    if (mData.belongs_to_collection) {
+                      const col = { id: mData.belongs_to_collection.id, name: mData.belongs_to_collection.name };
+                      setMovieCollections(prev => {
+                        const updated = { ...prev, [lookupName]: col };
+                        localStorage.setItem('movieCollections', JSON.stringify(updated));
+                        return updated;
+                      });
+                      addLog(`Saga détectée : ${mData.belongs_to_collection.name} pour ${cleanTitle}`);
+                    }
+                  } catch (colErr) {
+                    console.warn('Erreur collection pour', cleanTitle, colErr);
+                  }
+                }
               } else {
                 addLog(`Aucun résultat valide pour : ${cleanTitle}`);
               }
             } else {
               addLog(`TMDB : Aucun résultat pour : ${cleanTitle}`);
             }
+            } // fin else (non-saga)
           } catch (error: any) {
             addLog(`Erreur Phase 1 (${cleanTitle}) : ${error.message || error}`);
             console.error("Error fetching Phase 1 for", lookupName, error);
           }
         }
+
 
         // Phase 2: Episodes (if series)
         if (video.isSeriesGroup && video.isTvSeries && currentTvId) {
@@ -634,7 +794,60 @@ export default function App() {
     };
 
     fetchAllMetadata();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupedVideos, tmdbApiKey]);
+
+  // useEffect séparé : détecter les sagas TMDB sur les films standalone bruts
+  useEffect(() => {
+    const fetchCollections = async () => {
+      if (!tmdbApiKey || videos.length === 0) return;
+
+      // Filtrer les films qui : ne sont pas une série et n'ont pas encore de collection enregistrée
+      const standalonefilms = videos.filter(v => {
+        const isSeriesEp = !!v.name.match(/[sS]\d+[eE]\d+|\d+x\d+/i) || !!v.seriesName;
+        return !isSeriesEp;
+      });
+
+      for (const video of standalonefilms) {
+        if (movieCollections[video.name]) continue; // déjà connu
+        const cleanTitle = getCleanTitle(video.name);
+        if (!cleanTitle) continue;
+
+        try {
+          // Cherche le film sur TMDB
+          const searchUrl = `https://api.themoviedb.org/3/search/movie?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`;
+          const res = await fetch(searchUrl);
+          const data = await res.json();
+          if (!data.results || data.results.length === 0) continue;
+
+          const result = data.results.find((r: any) =>
+            (r.title || '').toLowerCase() === cleanTitle.toLowerCase()
+          ) || data.results[0];
+
+          if (!result?.id) continue;
+
+          // Récupère les détails du film pour obtenir belongs_to_collection
+          const detailUrl = `https://api.themoviedb.org/3/movie/${result.id}?api_key=${tmdbApiKey}&language=fr-FR`;
+          const dRes = await fetch(detailUrl);
+          const dData = await dRes.json();
+
+          if (dData.belongs_to_collection) {
+            const col = { id: dData.belongs_to_collection.id, name: dData.belongs_to_collection.name };
+            setMovieCollections(prev => {
+              const updated = { ...prev, [video.name]: col };
+              localStorage.setItem('movieCollections', JSON.stringify(updated));
+              return updated;
+            });
+          }
+        } catch (e) {
+          // Silently ignore
+        }
+      }
+    };
+
+    fetchCollections();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videos, tmdbApiKey]);
 
   const extractedDurationsRef = useRef<Set<string>>(new Set());
 
@@ -763,6 +976,17 @@ export default function App() {
     let result: VideoFile[] = [];
     try {
       const response = await Filesystem.readdir({ path: basePath, directory });
+
+      // Indexer les sous-titres du dossier par nom de base (sans extension)
+      const subtitleMap: Record<string, { uri: string; name: string }> = {};
+      for (const file of response.files) {
+        if (file.type === 'file' && file.name.match(/\.(srt|vtt|ass|ssa)$/i)) {
+          // Nom de base sans extension
+          const base = file.name.replace(/\.\w+$/, '').replace(/\.(fr|en|es|de|it|pt|nl|pl|ru|ja|zh|ko|ar|he|tr|sv|da|fi|nb|uk|cs|sk|hu|ro|hr|sr|bg|el|vi|th|hi|id|ms|fa)$/i, '').toLowerCase();
+          subtitleMap[base] = { uri: file.uri, name: file.name };
+        }
+      }
+
       for (const file of response.files) {
         const fullPath = basePath ? `${basePath}/${file.name}` : file.name;
         if (file.type === 'directory') {
@@ -792,7 +1016,11 @@ export default function App() {
               }
             }
           }
-          
+
+          // Chercher un sous-titre avec le même nom de base
+          const videoBase = file.name.replace(/\.\w+$/, '').toLowerCase();
+          const matchedSub = subtitleMap[videoBase];
+
           result.push({
             url: Capacitor.convertFileSrc(file.uri),
             nativeUri: file.uri,
@@ -803,7 +1031,8 @@ export default function App() {
             lastModified: file.mtime,
             seriesName,
             season,
-            episode
+            episode,
+            subtitleNativePath: matchedSub ? matchedSub.uri : undefined,
           } as any);
         }
       }
@@ -860,6 +1089,17 @@ export default function App() {
     const files = e.target.files;
     if (!files) return;
 
+    // Indexer les sous-titres par chemin relatif (sans extension)
+    const subtitleFileMap: Record<string, File> = {};
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (f.name.match(/\.(srt|vtt|ass|ssa)$/i)) {
+        const folder = (f.webkitRelativePath || f.name).replace(/\/[^\/]+$/, '');
+        const base = f.name.replace(/\.\w+$/, '').replace(/\.(fr|en|es|de|it|pt|nl|pl|ru|ja|zh|ko|ar|he|tr|sv|da|fi|nb|uk|cs|sk|hu|ro|hr|sr|bg|el|vi|th|hi|id|ms|fa)$/i, '').toLowerCase();
+        subtitleFileMap[`${folder}/${base}`] = f;
+      }
+    }
+
     const videoFiles: VideoFile[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -873,6 +1113,28 @@ export default function App() {
           if (!seriesName) seriesName = "Série Inconnue";
         }
 
+        // Chercher un sous-titre avec le même nom de base dans le même dossier
+        const folder = (file.webkitRelativePath || file.name).replace(/\/[^\/]+$/, '');
+        const videoBase = file.name.replace(/\.\w+$/, '').toLowerCase();
+        const subFile = subtitleFileMap[`${folder}/${videoBase}`];
+        let subtitleUrl: string | undefined;
+        if (subFile) {
+          // Convertir .srt en .vtt si nécessaire
+          if (subFile.name.endsWith('.srt')) {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const vttContent = srt2vtt(ev.target?.result as string || '');
+              const blob = new Blob([vttContent], { type: 'text/vtt' });
+              subtitleUrl = URL.createObjectURL(blob);
+              // Mettre à jour la vidéo avec l'URL du sous-titre
+              setVideos(prev => prev.map(v => v.name === file.name ? { ...v, subtitleUrl } : v));
+            };
+            reader.readAsText(subFile);
+          } else {
+            subtitleUrl = URL.createObjectURL(subFile);
+          }
+        }
+
         videoFiles.push({
           file,
           url: URL.createObjectURL(file),
@@ -881,7 +1143,8 @@ export default function App() {
           path: file.webkitRelativePath || file.name,
           seriesName,
           season,
-          episode
+          episode,
+          subtitleUrl,
         });
       }
     }
@@ -927,6 +1190,9 @@ export default function App() {
       // Utilise l'URI native absolue (file:///storage/...) pour ExoPlayer
       const videoPath = videoToPlay.nativeUri ?? videoToPlay.url;
       const startPosMs = watchPositions[videoToPlay.name] || 0;
+      // Priorité : sous-titre manuel > sous-titre auto-détecté
+      const autoSubPath = videoToPlay.subtitleNativePath;
+      const subtitleToUse = activeSubtitleNativePath || activeSubtitleUrl || autoSubPath || undefined;
       
       VideoLauncher.openVideo({ 
         path: videoPath, 
@@ -934,7 +1200,7 @@ export default function App() {
         startPosition: startPosMs,
         playerType: videoPlayer,
         packageId: selectedExternalPlayer,
-        subtitlePath: activeSubtitleNativePath || activeSubtitleUrl || undefined
+        subtitlePath: subtitleToUse
       }).then((result: any) => {
           if (result) {
             // Mise à jour de la position et progression
@@ -965,7 +1231,12 @@ export default function App() {
 
     setCurrentVideo(videoToPlay);
     setInfoVideo(null);
-    setActiveSubtitleUrl(null);
+    // Charger le sous-titre auto-détecté si aucun n'est sélectionné manuellement
+    if (!activeSubtitleUrl && videoToPlay.subtitleUrl) {
+      setActiveSubtitleUrl(videoToPlay.subtitleUrl);
+    } else if (!activeSubtitleUrl) {
+      setActiveSubtitleUrl(null);
+    }
     setSubtitles([]);
   };
 
@@ -1078,21 +1349,16 @@ export default function App() {
     }
   };
 
-  const srt2vtt = (srt: string) => {
-    let vtt = 'WEBVTT\n\n';
-    vtt += srt
-      .replace(/\{\\([ibu])\}/g, '<$1>')
-      .replace(/\{\\\/([ibu])\}/g, '</$1>')
-      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
-      .replace(/\r\n/g, '\n');
-    return vtt;
-  };
-
   const tvShows = groupedVideos.filter(v => v.isSeriesGroup);
   const movies = groupedVideos.filter(v => !v.isSeriesGroup);
   
-  // Nouveautés (Recently Added)
-  const recentAdditions = [...groupedVideos].sort((a, b) => (b.file?.lastModified || b.lastModified || 0) - (a.file?.lastModified || a.lastModified || 0));
+  // Nouveautés (Recently Added) - Unwatched first
+  const recentAdditions = [...groupedVideos].sort((a, b) => {
+    const aWatched = a.isSeriesGroup ? a.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[a.name];
+    const bWatched = b.isSeriesGroup ? b.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[b.name];
+    if (aWatched !== bWatched) return aWatched ? 1 : -1;
+    return (b.file?.lastModified || b.lastModified || 0) - (a.file?.lastModified || a.lastModified || 0);
+  });
   
   // Vus récemment (Recently Watched)
   const recentlyWatchedVideos = recentlyWatched
@@ -1105,11 +1371,21 @@ export default function App() {
     .map(name => videos.find(v => v.name === name))
     .filter((v): v is VideoFile => v !== undefined && (watchProgress[v.name] || 0) > 0 && (watchProgress[v.name] || 0) < 95 && !watchedVideos[v.name]);
   
-  // De A à Z (Alphabetical)
-  const alphabetical = [...groupedVideos].sort((a, b) => a.name.localeCompare(b.name));
+  // De A à Z (Alphabetical) - Unwatched first
+  const alphabetical = [...groupedVideos].sort((a, b) => {
+    const aWatched = a.isSeriesGroup ? a.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[a.name];
+    const bWatched = b.isSeriesGroup ? b.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[b.name];
+    if (aWatched !== bWatched) return aWatched ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
 
-  // Recommandations (Pseudo-random based on name length for stability)
-  const recommendations = [...groupedVideos].sort((a, b) => (a.name.length % 7) - (b.name.length % 7));
+  // Recommandations (Pseudo-random based on name length for stability) - Unwatched first
+  const recommendations = [...groupedVideos].sort((a, b) => {
+    const aWatched = a.isSeriesGroup ? a.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[a.name];
+    const bWatched = b.isSeriesGroup ? b.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[b.name];
+    if (aWatched !== bWatched) return aWatched ? 1 : -1;
+    return (a.name.length % 7) - (b.name.length % 7);
+  });
 
   // Group by folder
   const folders = groupedVideos.reduce((acc, video) => {
@@ -1148,6 +1424,12 @@ export default function App() {
     }
 
     result.sort((a, b) => {
+      // Priorité aux vidéos non-vues (Sauf si on trie par date d'ajout où l'on veut peut être voir les derniers même si vus?)
+      // Mais d'après la demande de l'utilisateur "tout ce qui est en vu ne soit pas mis en avant", on trie les vus à la fin
+      const aWatched = a.isSeriesGroup ? a.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[a.name];
+      const bWatched = b.isSeriesGroup ? b.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[b.name];
+      if (aWatched !== bWatched) return aWatched ? 1 : -1;
+
       if (sortBy === 'alpha') {
         const nameA = a.isSeriesGroup ? a.seriesName! : a.name;
         const nameB = b.isSeriesGroup ? b.seriesName! : b.name;
@@ -1179,7 +1461,10 @@ export default function App() {
 
   const isLibraryViewActive = sortBy !== 'alpha' || filterGenre !== 'all' || filterResolution !== 'all';
 
-  const heroVideo = recentAdditions[0] || groupedVideos[0];
+  const heroVideo = recentAdditions.find(v => {
+    if (v.isSeriesGroup) return v.episodes?.some(ep => !watchedVideos[ep.name]);
+    return !watchedVideos[v.name];
+  }) || recentAdditions[0] || groupedVideos[0];
 
   const VideoRow: React.FC<{ title: string, items: VideoFile[] }> = ({ title, items }) => {
     if (items.length === 0) return null;
@@ -1187,67 +1472,84 @@ export default function App() {
       <div className="mb-8">
         <h2 className="text-lg md:text-2xl font-bold text-white mb-2 md:mb-4 px-4 md:px-12">{title}</h2>
         <div className="flex gap-2 md:gap-3 overflow-x-auto px-4 md:px-12 pb-8 pt-2 scrollbar-hide snap-x">
-          {items.map((video, idx) => (
-            <div 
-              key={idx}
-              className="relative flex-none w-28 md:w-48 aspect-[2/3] bg-zinc-900 rounded-md overflow-hidden cursor-pointer snap-start transition-all duration-300 hover:scale-105 hover:z-20 hover:ring-2 hover:ring-white/50 group"
-              onClick={() => handleOpenInfoModal(video)}
-            >
-              {video.isSeriesGroup && (
-                <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded shadow-lg uppercase">
-                  Série
-                </div>
-              )}
-              {(video.isSeriesGroup 
-                  ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
-                  : !!watchedVideos[video.name]
-                ) && (
-                <div className="absolute top-2 right-2 z-20 bg-green-600 rounded-full p-1 shadow-md">
-                  <Check className="w-2.5 h-2.5 md:w-3 md:h-3 text-white" />
-                </div>
-              )}
-              {posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)] ? (
-                <img src={posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)]} alt={video.name} className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center p-2 md:p-4 text-center bg-zinc-800">
-                  <p className="text-xs md:text-sm font-medium text-zinc-300 line-clamp-4">
-                    {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
-                  </p>
-                </div>
-              )}
-              {getResolution(video.name) && (
-                <div className="absolute bottom-2 left-2 z-10 bg-black/60 backdrop-blur-sm text-white text-[8px] md:text-[10px] font-black px-1.5 py-0.5 rounded border border-white/20 uppercase tracking-tighter">
-                  {getResolution(video.name)}
-                </div>
-              )}
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors hidden md:flex flex-col items-center justify-center gap-4 pointer-events-none">
-                <button onClick={(e) => { e.stopPropagation(); playVideo(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 bg-white text-black p-3 rounded-full hover:bg-white/80">
-                  <Play className="w-6 h-6 fill-black" />
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); handleOpenInfoModal(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 delay-75 bg-zinc-800/80 text-white p-3 rounded-full hover:bg-zinc-700/80 border border-white/20">
-                  <Info className="w-6 h-6" />
-                </button>
-              </div>
-              {watchProgress[video.name] > 0 && watchProgress[video.name] < 100 && (
-                <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600 flex items-center">
-                  <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
-                  {title === "Continuer la lecture" && (
+          {items.map((video, idx) => {
+            const isWatched = video.isSeriesGroup 
+              ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
+              : !!watchedVideos[video.name];
+            
+            return (
+              <div 
+                key={idx}
+                className="flex-none w-28 md:w-48 snap-start group"
+                onClick={() => handleOpenInfoModal(video)}
+              >
+                <div className={`relative aspect-[2/3] bg-zinc-900 rounded-md overflow-hidden cursor-pointer transition-all duration-300 group-hover:scale-105 group-hover:z-20 group-hover:ring-2 group-hover:ring-white/50 shadow-lg`}>
+                  {video.isSeriesGroup && (
+                    <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded shadow-lg uppercase">
+                      {video.isTvSeries ? 'Série' : 'Saga'}
+                    </div>
+                  )}
+                  {(video.isSeriesGroup 
+                      ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
+                      : !!watchedVideos[video.name]
+                    ) && (
+                    <div className="absolute top-2 right-2 z-20 bg-green-600 rounded-full p-1 shadow-md">
+                      <Check className="w-2.5 h-2.5 md:w-3 md:h-3 text-white" />
+                    </div>
+                  )}
+                  {posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)] ? (
+                    <img src={posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)]} alt={getCleanTitle(video.name)} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center p-2 md:p-4 text-center bg-zinc-800">
+                      <p className="text-xs md:text-sm font-medium text-zinc-300">
+                        {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
+                      </p>
+                    </div>
+                  )}
+                  {getResolution(video.name) && (
+                    <div className="absolute bottom-2 left-2 z-10 bg-black/60 backdrop-blur-sm text-white text-[8px] md:text-[10px] font-black px-1.5 py-0.5 rounded border border-white/20 uppercase tracking-tighter">
+                      {getResolution(video.name)}
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors hidden md:flex flex-col items-center justify-center gap-4 pointer-events-none">
+                    <button onClick={(e) => { e.stopPropagation(); playVideo(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 bg-white text-black p-3 rounded-full hover:bg-white/80">
+                      <Play className="w-6 h-6 fill-black" />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleOpenInfoModal(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 delay-75 bg-zinc-800/80 text-white p-3 rounded-full hover:bg-zinc-700/80 border border-white/20">
+                      <Info className="w-6 h-6" />
+                    </button>
+                  </div>
+                  
+                  {watchProgress[video.name] > 0 && watchProgress[video.name] < 100 && (
+                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
+                      <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
+                    </div>
+                  )}
+                  {title === "Continuer la lecture" && watchProgress[video.name] > 0 && (
                     <button 
                       onClick={(e) => { e.stopPropagation(); resetProgress(video.name); }}
-                      className="absolute right-1 -top-6 p-1 bg-black/60 rounded-full text-white pointer-events-auto hover:bg-red-600 transition-colors shadow-lg"
+                      className="absolute bottom-2 right-2 p-1.5 md:p-1 bg-black/60 rounded-full text-white pointer-events-auto hover:bg-red-600 transition-colors shadow-lg z-30 opacity-100 md:opacity-0 group-hover:opacity-100"
                       title="Reprendre à zéro"
                     >
-                      <RotateCcw className="w-3 h-3" />
+                      <RotateCcw className="w-4 h-4 md:w-3 md:h-3" />
                     </button>
                   )}
                 </div>
-              )}
-            </div>
-          ))}
+                
+                {/* Titre visible en entier en dessous */}
+                <div className="mt-2 px-1">
+                  <p className="text-[10px] md:text-sm font-medium text-zinc-300 leading-tight break-words">
+                    {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
   };
+
 
   const formatSize = (bytes: number) => {
     if (!bytes) return '0 B';
@@ -1732,44 +2034,47 @@ export default function App() {
                             {selectedPlaylist.videoNames.map((videoName, index) => {
                               const video = groupedVideos.find(v => v.name === videoName);
                               if (!video) return null;
+                              
+                              const isWatched = video.isSeriesGroup 
+                                ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
+                                : !!watchedVideos[video.name];
+
                               return (
                                 <div 
                                   key={index}
-                                  className="group relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 hover:scale-105 hover:z-30 shadow-lg"
+                                  className="group flex flex-col"
                                   onClick={() => handleOpenInfoModal(video)}
                                 >
-                                  {posters[video.name] ? (
-                                    <img 
-                                      src={posters[video.name]} 
-                                      alt={video.name} 
-                                      className="w-full h-full object-cover"
-                                      loading="lazy"
-                                    />
-                                  ) : (
-                                    <div className="w-full h-full flex items-center justify-center p-4 text-center">
-                                      <span className="text-zinc-500 font-medium text-sm line-clamp-3">{getCleanTitle(video.name)}</span>
+                                  <div className={`relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 group-hover:scale-105 group-hover:z-30 shadow-lg`}>
+                                    {posters[video.name] ? (
+                                      <img src={posters[video.name]} alt={getCleanTitle(video.name)} className="w-full h-full object-cover" />
+                                    ) : (
+                                      <div className="w-full h-full flex items-center justify-center p-4 text-center">
+                                        <span className="text-zinc-500 font-medium text-sm">{getCleanTitle(video.name)}</span>
+                                      </div>
+                                    )}
+                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center p-4">
+                                      <button onClick={(e) => { e.stopPropagation(); playVideo(video, selectedPlaylist, index); }} className="bg-white text-black p-3 rounded-full hover:bg-white/80">
+                                        <Play className="w-6 h-6 fill-black" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); removeVideoFromPlaylist(selectedPlaylist.id, video.name); }} 
+                                        className="absolute top-2 right-2 p-1.5 bg-red-600/80 rounded-full hover:bg-red-600 transition"
+                                      >
+                                        <X className="w-3.5 h-3.5 text-white" />
+                                      </button>
                                     </div>
-                                  )}
-                                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col items-center justify-center p-4">
-                                    <button onClick={(e) => { e.stopPropagation(); playVideo(video, selectedPlaylist, index); }} className="bg-white text-black p-3 rounded-full hover:bg-white/80 mb-2">
-                                      <Play className="w-6 h-6 fill-black" />
-                                    </button>
-                                    <p className="text-white text-xs font-medium text-center line-clamp-2 drop-shadow-md">
+                                    {watchProgress[video.name] > 0 && (
+                                      <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
+                                        <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="mt-2 px-1">
+                                    <p className="text-[10px] md:text-xs font-medium text-zinc-400 break-words line-clamp-none">
                                       {getCleanTitle(video.name)}
                                     </p>
-                                    <button 
-                                      onClick={(e) => { e.stopPropagation(); removeVideoFromPlaylist(selectedPlaylist.id, video.name); }} 
-                                      className="absolute top-2 right-2 p-2 bg-red-600/80 rounded-full hover:bg-red-600 transition"
-                                      title="Retirer de la liste"
-                                    >
-                                      <X className="w-4 h-4 text-white" />
-                                    </button>
                                   </div>
-                                  {watchProgress[video.name] > 0 && (
-                                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
-                                      <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
-                                    </div>
-                                  )}
                                 </div>
                               );
                             })}
@@ -1818,55 +2123,65 @@ export default function App() {
                     </h2>
                     {searchResults.length > 0 ? (
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                        {searchResults.map((video, index) => (
-                          <div 
-                            key={index}
-                            className="group relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 hover:scale-105 hover:z-30 shadow-lg"
-                            onClick={() => handleOpenInfoModal(video)}
-                          >
-                            {(video.isSeriesGroup 
-                                ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
-                                : !!watchedVideos[video.name]
-                              ) && (
-                              <div className="absolute top-2 right-2 z-20 bg-green-600 rounded-full p-1 shadow-md">
-                                <Check className="w-2.5 h-2.5 md:w-3 md:h-3 text-white" />
+                        {searchResults.map((video, index) => {
+                          const isWatched = video.isSeriesGroup 
+                            ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
+                            : !!watchedVideos[video.name];
+
+                          return (
+                            <div 
+                              key={index}
+                              className="group flex flex-col"
+                              onClick={() => handleOpenInfoModal(video)}
+                            >
+                              <div className={`relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 group-hover:scale-105 group-hover:z-30 shadow-lg`}>
+                                {(video.isSeriesGroup 
+                                    ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
+                                    : !!watchedVideos[video.name]
+                                  ) && (
+                                  <div className="absolute top-2 right-2 z-20 bg-green-600 rounded-full p-1 shadow-md">
+                                    <Check className="w-2.5 h-2.5 md:w-3 md:h-3 text-white" />
+                                  </div>
+                                )}
+                                {video.isSeriesGroup && (
+                                  <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-lg uppercase">
+                                    {video.isTvSeries ? 'Série' : 'Saga'}
+                                  </div>
+                                )}
+                                {getResolution(video.name) && (
+                                  <div className="absolute bottom-2 left-2 z-10 bg-black/60 backdrop-blur-sm text-white text-[10px] font-black px-1.5 py-0.5 rounded border border-white/20 uppercase tracking-tighter">
+                                    {getResolution(video.name)}
+                                  </div>
+                                )}
+                                {posters[video.isSeriesGroup ? video.seriesName! : video.name] ? (
+                                  <img 
+                                    src={posters[video.isSeriesGroup ? video.seriesName! : video.name]} 
+                                    alt={getCleanTitle(video.name)} 
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center p-4 text-center">
+                                    <span className="text-zinc-500 font-medium text-sm">{video.isSeriesGroup ? video.seriesName : getCleanTitle(video.name)}</span>
+                                  </div>
+                                )}
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center p-4">
+                                  <Play className="w-10 h-10 text-white drop-shadow-lg" />
+                                </div>
+                                {watchProgress[video.name] > 0 && watchProgress[video.name] < 100 && (
+                                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
+                                    <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
+                                  </div>
+                                )}
                               </div>
-                            )}
-                            {video.isSeriesGroup && (
-                              <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-lg uppercase">
-                                Série
+                              <div className="mt-2 px-1">
+                                <p className="text-[10px] md:text-xs font-medium text-zinc-400 break-words line-clamp-none">
+                                  {video.isSeriesGroup ? video.seriesName : getCleanTitle(video.name)}
+                                </p>
                               </div>
-                            )}
-                            {getResolution(video.name) && (
-                              <div className="absolute bottom-2 left-2 z-10 bg-black/60 backdrop-blur-sm text-white text-[10px] font-black px-1.5 py-0.5 rounded border border-white/20 uppercase tracking-tighter">
-                                {getResolution(video.name)}
-                              </div>
-                            )}
-                            {posters[video.isSeriesGroup ? video.seriesName! : video.name] ? (
-                              <img 
-                                src={posters[video.isSeriesGroup ? video.seriesName! : video.name]} 
-                                alt={video.name} 
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center p-4 text-center">
-                                <span className="text-zinc-500 font-medium text-sm line-clamp-3">{video.isSeriesGroup ? video.seriesName : getCleanTitle(video.name)}</span>
-                              </div>
-                            )}
-                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col items-center justify-center p-4">
-                              <Play className="w-10 h-10 text-white mb-2 drop-shadow-lg" />
-                              <p className="text-white text-xs font-black text-center line-clamp-2 drop-shadow-md uppercase tracking-tighter">
-                                {video.isSeriesGroup ? video.seriesName : getCleanTitle(video.name)}
-                              </p>
                             </div>
-                            {watchProgress[video.name] > 0 && watchProgress[video.name] < 100 && (
-                              <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
-                                <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="text-center text-zinc-500 mt-12">
@@ -1881,12 +2196,17 @@ export default function App() {
                     </h2>
                     {filteredAndSortedVideos.length > 0 ? (
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                        {filteredAndSortedVideos.map((video, index) => (
-                          <div 
-                            key={index}
-                            className="group relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 hover:scale-105 hover:z-30 shadow-lg"
-                            onClick={() => handleOpenInfoModal(video)}
-                          >
+                        {filteredAndSortedVideos.map((video, index) => {
+                          const isWatched = video.isSeriesGroup 
+                            ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
+                            : !!watchedVideos[video.name];
+
+                          return (
+                            <div 
+                              key={index}
+                              className={`group relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 hover:scale-105 hover:z-30 shadow-lg ${isWatched ? 'opacity-40 grayscale hover:opacity-100 hover:grayscale-0' : 'opacity-100'}`}
+                              onClick={() => handleOpenInfoModal(video)}
+                            >
                             {(video.isSeriesGroup 
                                 ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
                                 : !!watchedVideos[video.name]
@@ -1925,8 +2245,9 @@ export default function App() {
                                 <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
                               </div>
                             )}
-                          </div>
-                        ))}
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="text-center text-zinc-500 mt-12">
@@ -1957,9 +2278,11 @@ export default function App() {
                           <h2 className="text-3xl md:text-6xl font-bold text-white mb-2 md:mb-4 drop-shadow-xl">
                             {getCleanTitle(heroVideo.name)}
                           </h2>
-                          <p className="text-zinc-300 text-sm md:text-lg mb-4 md:mb-6 line-clamp-2 md:line-clamp-3 max-w-xl drop-shadow-md">
-                            {heroVideo.name}
-                          </p>
+                          {overviews[heroVideo.isSeriesGroup ? heroVideo.seriesName! : (heroVideo.seriesName || heroVideo.name)] && (
+                            <p className="text-zinc-300 text-sm md:text-lg mb-4 md:mb-6 line-clamp-2 md:line-clamp-3 max-w-xl drop-shadow-md">
+                              {overviews[heroVideo.isSeriesGroup ? heroVideo.seriesName! : (heroVideo.seriesName || heroVideo.name)]}
+                            </p>
+                          )}
                           <div className="flex flex-wrap gap-2 md:gap-3">
                             <button 
                               onClick={() => playVideo(heroVideo)} 
@@ -2001,12 +2324,15 @@ export default function App() {
                       <VideoRow title="De A à Z" items={alphabetical} />
                     </div>
                   </>
-                )}
+                )
+              }
               </div>
-            )}
+            )
+          }
           </div>
-        )}
-      </main>
+        )
+      }
+    </main>
 
       {/* Hidden File Input */}
       <input 
@@ -2024,7 +2350,7 @@ export default function App() {
           <div className="bg-zinc-950 md:rounded-3xl w-full h-full md:h-auto md:max-h-[90vh] md:max-w-6xl overflow-hidden shadow-[0_0_100px_rgba(0,0,0,0.8)] relative animate-in fade-in zoom-in-95 duration-500 flex flex-col border border-white/5">
             
             {/* Header / Hero Section */}
-            <div className="relative h-[35vh] md:h-[55vh] w-full shrink-0">
+            <div className="relative w-full shrink-0" style={{ height: 'max(48vh, 260px)' }}>
               <div className="absolute inset-0">
                 {backdrops[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name] || posters[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name] ? (
                   <img 
@@ -2035,28 +2361,33 @@ export default function App() {
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-zinc-900 to-black border-b border-white/5" />
                 )}
-                <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/30 to-black/50" />
                 <div className="absolute inset-0 bg-gradient-to-r from-zinc-950/90 via-transparent to-transparent hidden md:block" />
               </div>
               
+              {/* Bouton fermer — safe-area pour eviter le status bar Android */}
               <button 
                 onClick={() => { setInfoVideo(null); setExpandedEpisode(null); }} 
-                className="absolute top-4 right-4 z-50 p-2.5 bg-black/40 hover:bg-zinc-800 rounded-full text-white backdrop-blur-xl transition-all shadow-2xl border border-white/10 active:scale-90"
+                className="absolute right-4 z-50 p-2.5 bg-black/60 hover:bg-zinc-700 rounded-full text-white backdrop-blur-xl transition-all shadow-2xl border border-white/20 active:scale-90"
+                style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)' }}
               >
                 <X className="w-6 h-6" />
               </button>
               
-              <div className="absolute bottom-6 md:bottom-12 left-4 md:left-12 right-4 md:right-12 z-10">
-                <div className="flex flex-col gap-4 md:gap-7">
+              {/* Titre + boutons d'action */}
+              <div className="absolute bottom-5 md:bottom-12 left-4 md:left-12 right-4 md:right-12 z-10">
+                <div className="flex flex-col gap-3 md:gap-7">
                   <div>
                     {infoVideo.isSeriesGroup && (
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="text-red-600 font-black text-xs md:text-sm uppercase tracking-[0.3em] drop-shadow-lg">SÉRIE ORIGINALE</span>
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="text-red-500 font-black text-xs md:text-sm uppercase tracking-[0.3em] drop-shadow-lg">
+                          {infoVideo.isTvSeries ? 'SÉRIE ORIGINALE' : 'SAGA / COLLECTION'}
+                        </span>
                         <div className="h-4 w-px bg-white/20" />
-                        <span className="text-white/60 text-xs md:text-sm font-bold uppercase tracking-widest">{infoVideo.episodes?.length || 0} Épisodes</span>
+                        <span className="text-white/60 text-xs md:text-sm font-bold uppercase tracking-widest">{infoVideo.episodes?.length || 0} {infoVideo.isTvSeries ? 'Épisodes' : 'Films'}</span>
                       </div>
                     )}
-                    <h2 className="text-4xl md:text-8xl font-black text-white drop-shadow-[0_4px_20px_rgba(0,0,0,0.9)] leading-tight max-w-5xl tracking-tighter">
+                    <h2 className="text-3xl md:text-8xl font-black text-white drop-shadow-[0_4px_20px_rgba(0,0,0,0.9)] leading-tight max-w-5xl tracking-tighter">
                       {infoVideo.isSeriesGroup ? infoVideo.seriesName : getCleanTitle(infoVideo.name)}
                     </h2>
                   </div>
@@ -2096,25 +2427,25 @@ export default function App() {
                         ) ? 'VU' : 'MARQUER VU'}
                     </button>
 
+                    {/* Bouton recharger TMDB — visible avec label */}
                     <button 
                       onClick={() => fetchSingleMetadata(infoVideo)}
                       disabled={isRefreshingMetadata}
-                      className="p-4 md:p-5 bg-white/5 border border-white/10 rounded-xl text-white hover:bg-white/20 active:scale-95 transition-all shadow-xl relative overflow-hidden flex-1 md:flex-none"
-                      title="Rafraîchir les métadonnées"
+                      className="px-4 py-2.5 md:py-4 bg-white/5 border border-white/10 rounded-xl text-white hover:bg-white/20 active:scale-95 transition-all shadow-xl flex items-center gap-2 font-bold text-sm disabled:opacity-50"
+                      title="Recharger les données TMDB"
                     >
-                      <RefreshCw className={`w-5 h-5 md:w-8 md:h-8 ${isRefreshingMetadata ? 'animate-spin text-red-500' : 'text-zinc-400 group-hover:text-white'}`} />
-                      {isRefreshingMetadata && (
-                        <div className="absolute inset-0 bg-red-600/5 animate-pulse" />
-                      )}
+                      <RefreshCw className={`w-4 h-4 ${isRefreshingMetadata ? 'animate-spin text-red-400' : 'text-zinc-300'}`} />
+                      <span className="hidden sm:inline">{isRefreshingMetadata ? 'Chargement…' : 'TMDB'}</span>
                     </button>
                     
                     <div className="relative flex-1 md:flex-none">
                       <button 
                         onClick={() => setShowPlaylistSelector(!showPlaylistSelector)}
-                        className="w-full md:w-auto p-4 md:p-5 bg-white/5 border border-white/10 rounded-xl text-white hover:bg-white/20 hover:scale-105 transition-all backdrop-blur-xl shadow-2xl"
+                        className="px-4 py-2.5 md:py-4 bg-white/5 border border-white/10 rounded-xl text-white hover:bg-white/20 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-2 font-bold text-sm"
                         title="Ajouter à une liste de lecture"
                       >
-                        <ListPlus className="w-6 h-6 md:w-8 md:h-8" />
+                        <ListPlus className="w-4 h-4 text-zinc-300" />
+                        <span className="hidden sm:inline">MA LISTE</span>
                       </button>
                       {showPlaylistSelector && (
                         <div className="absolute bottom-full mb-4 left-0 md:left-auto md:right-0 w-80 bg-zinc-900/90 border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-50 overflow-hidden backdrop-blur-2xl animate-in fade-in slide-in-from-bottom-6 duration-500">
@@ -2166,11 +2497,21 @@ export default function App() {
             <div className="p-6 md:p-12 overflow-y-auto custom-scrollbar flex-1 bg-gradient-to-b from-transparent to-black/40">
               <div className="flex flex-col md:flex-row gap-8 md:gap-16">
                 <div className="flex-1 space-y-6">
-                  <p className="text-zinc-300 text-base md:text-xl leading-relaxed font-medium">
-                    {overviews[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name] || 
-                      (!tmdbApiKey ? "Veuillez configurer votre clé API TMDB dans les paramètres pour voir les résumés." : "Synopsis non disponible sur TMDB.")
-                    }
-                  </p>
+                  <div className="space-y-4">
+                    <p className={`text-zinc-300 text-base md:text-xl leading-relaxed font-medium transition-all duration-500 origin-top overflow-hidden ${!isSynopsisExpanded ? 'line-clamp-3' : ''}`}>
+                      {overviews[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name] || 
+                        (!tmdbApiKey ? "Veuillez configurer votre clé API TMDB dans les paramètres pour voir les résumés." : "Synopsis non disponible sur TMDB.")
+                      }
+                    </p>
+                    {overviews[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name] && overviews[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name].length > 150 && (
+                      <button 
+                        onClick={() => setIsSynopsisExpanded(!isSynopsisExpanded)}
+                        className="text-red-500 font-black text-[10px] md:text-xs uppercase tracking-[0.2em] border-b border-red-600/30 pb-0.5 hover:text-white hover:border-white transition-all"
+                      >
+                        {isSynopsisExpanded ? '↑ RÉDUIRE' : '↓ LIRE LA SUITE'}
+                      </button>
+                    )}
+                  </div>
                   
                   {videoGenres[infoVideo.isSeriesGroup ? infoVideo.seriesName! : infoVideo.name] && (
                     <div className="flex flex-wrap gap-2">
@@ -2360,7 +2701,7 @@ export default function App() {
                                 <div className="flex-1 space-y-6">
                                   <div className="flex flex-wrap items-center gap-4">
                                     <div className="px-3 py-1.5 bg-red-600/10 border border-red-600/20 rounded-lg">
-                                       <span className="text-red-500 text-[10px] font-black uppercase tracking-[0.2em]">ÉPISODE {idx + 1}</span>
+                                       <span className="text-red-500 text-[10px] font-black uppercase tracking-[0.2em]">{infoVideo.isTvSeries ? 'ÉPISODE' : 'FILM'} {idx + 1}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-zinc-500">
                                       <Clock className="w-4 h-4" />
@@ -2371,12 +2712,20 @@ export default function App() {
                                     )}
                                   </div>
 
-                                  <div className="space-y-3">
-                                    <h5 className="text-white/60 text-[10px] font-black uppercase tracking-[0.3em]">Synopsys de l'épisode</h5>
-                                    <p className="text-zinc-300 text-sm md:text-base leading-relaxed font-medium">
+                                  <div className="space-y-4">
+                                    <h5 className="text-white/60 text-[10px] font-black uppercase tracking-[0.3em]">Synopsis {infoVideo.isTvSeries ? "de l'épisode" : "du film"}</h5>
+                                    <p className={`text-zinc-300 text-sm md:text-base leading-relaxed font-medium transition-all duration-500 overflow-hidden ${!isEpisodeSynopsisExpanded ? 'line-clamp-3' : ''}`}>
                                       {episodeOverviews[`${infoVideo.seriesName}_s${ep.season ?? 1}_e${ep.episode}`] || "(Synopsis non disponible ou en cours de chargement...)"}
                                     </p>
-                                  </div>
+                                    {episodeOverviews[`${infoVideo.seriesName}_s${ep.season ?? 1}_e${ep.episode}`] && episodeOverviews[`${infoVideo.seriesName}_s${ep.season ?? 1}_e${ep.episode}`].length > 100 && (
+                                       <button 
+                                         onClick={() => setIsEpisodeSynopsisExpanded(!isEpisodeSynopsisExpanded)}
+                                         className="text-red-500 font-black text-[9px] uppercase tracking-[0.2em] transition-all hover:text-white"
+                                       >
+                                         {isEpisodeSynopsisExpanded ? '↑ RÉDUIRE' : '↓ LIRE LA SUITE'}
+                                       </button>
+                                     )}
+                                   </div>
 
                                   <div className="pt-4 flex flex-wrap gap-4">
                                     <button 
