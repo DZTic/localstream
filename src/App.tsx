@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, RotateCcw, RotateCw, Pause, Clock, Plus } from 'lucide-react';
+import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, CloudOff, RotateCcw, RotateCw, Pause, Clock, Plus, History } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
@@ -376,7 +376,7 @@ export default function App() {
       return [];
     }
   });
-  const [activeTab, setActiveTab] = useState<'home' | 'playlists'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'playlists' | 'history'>('home');
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
@@ -1459,6 +1459,22 @@ export default function App() {
     ? filteredAndSortedVideos.filter(v => v.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : [];
 
+  const historyItems = React.useMemo(() => {
+    const items = Object.keys(watchedVideos)
+      .filter(key => watchedVideos[key])
+      .filter(key => !key.match(/[sS]\d+(\s*)[eE]\d+|(\d+)(\s*)x(\d+)/i));
+
+    return items.map(key => {
+      const videoMatch = groupedVideos.find(v => v.seriesName === key || v.name === key);
+      return {
+        id: key,
+        name: key,
+        isLocal: !!videoMatch,
+        video: videoMatch
+      };
+    });
+  }, [watchedVideos, groupedVideos]);
+
   const isLibraryViewActive = sortBy !== 'alpha' || filterGenre !== 'all' || filterResolution !== 'all';
 
   const heroVideo = recentAdditions.find(v => {
@@ -1778,6 +1794,12 @@ export default function App() {
                   className={`transition ${activeTab === 'playlists' ? 'text-white font-bold' : 'hover:text-zinc-400'}`}
                 >
                   Listes de lecture
+                </button>
+                <button
+                  onClick={() => setActiveTab('history')}
+                  className={`transition ${activeTab === 'history' ? 'text-white font-bold' : 'hover:text-zinc-400'}`}
+                >
+                  Déjà vu
                 </button>
               </nav>
             )}
@@ -2129,6 +2151,63 @@ export default function App() {
                             Vous n'avez pas encore créé de liste de lecture.
                           </div>
                         )}
+                      </div>
+                    )}
+                  </div>
+                ) : activeTab === 'history' ? (
+                  <div className="px-4 md:px-12 min-h-screen pt-20">
+                    <h2 className="text-2xl md:text-3xl font-bold text-white mb-8">Contenus vus</h2>
+                    {historyItems.length > 0 ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                        {historyItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className="group flex flex-col"
+                            onClick={() => item.isLocal && item.video && handleOpenInfoModal(item.video)}
+                          >
+                            <div className={`relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden transition-transform duration-300 shadow-lg ${item.isLocal ? 'cursor-pointer group-hover:scale-105 group-hover:z-30' : 'opacity-60'}`}>
+                              {posters[item.id] ? (
+                                <img src={posters[item.id]} alt={getCleanTitle(item.name)} className={`w-full h-full object-cover ${!item.isLocal ? 'grayscale opacity-50' : ''}`} />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center p-4 text-center">
+                                  <span className="text-zinc-500 font-medium text-sm">{getCleanTitle(item.name)}</span>
+                                </div>
+                              )}
+
+                              {!item.isLocal && (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-20">
+                                  <CloudOff className="w-8 h-8 text-zinc-400 mb-2" />
+                                  <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest text-center px-2">Non disponible</span>
+                                </div>
+                              )}
+
+                              <div className={`absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center p-4 ${!item.isLocal ? 'z-30' : ''}`}>
+                                {item.isLocal && (
+                                  <button onClick={(e) => { e.stopPropagation(); if (item.video) playVideo(item.video); }} className="bg-white text-black p-3 rounded-full hover:bg-white/80">
+                                    <Play className="w-6 h-6 fill-black" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); toggleWatched(item.id); }}
+                                  className={`absolute top-2 right-2 p-1.5 bg-red-600/80 rounded-full hover:bg-red-600 transition`}
+                                  title="Retirer de l'historique"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-white" />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="mt-2 px-1">
+                              <p className="text-[10px] md:text-xs font-medium text-zinc-400 break-words line-clamp-none">
+                                {getCleanTitle(item.name)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center text-zinc-500 mt-12 flex flex-col items-center gap-4">
+                        <History className="w-16 h-16 text-zinc-700" />
+                        <p>Votre historique est vide.</p>
                       </div>
                     )}
                   </div>
