@@ -1623,6 +1623,22 @@ export default function App() {
   };
 
   const handleOpenInfoModal = (video: VideoFile) => {
+    // Si c'est un épisode individuel (pas un groupe), on remonte au groupe de série parent
+    if (!video.isSeriesGroup && (video.season !== undefined || video.seriesName)) {
+      const parentGroup = groupedVideos.find(g =>
+        g.isSeriesGroup && g.episodes?.some(ep => ep.name === video.name)
+      );
+      if (parentGroup) {
+        setInfoVideo(parentGroup);
+        setShowPlaylistSelector(false);
+        // Ouvrir directement l'épisode cliqué dans le panneau d'info
+        setExpandedEpisode(video.name);
+        const season = video.season || 1;
+        setSelectedSeason(season);
+        return;
+      }
+    }
+
     setInfoVideo(video);
     setShowPlaylistSelector(false);
     setExpandedEpisode(null);

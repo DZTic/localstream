@@ -12,6 +12,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
+import androidx.media3.ui.CaptionStyleCompat;
+import androidx.media3.ui.SubtitleView;
+import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
@@ -102,6 +105,20 @@ public class PlayerActivity extends Activity {
         player = new ExoPlayer.Builder(this).build();
         playerView.setPlayer(player);
         playerView.setKeepScreenOn(true);
+
+        // Style des sous-titres : fond transparent, texte blanc avec ombre
+        if (playerView.getSubtitleView() != null) {
+            playerView.getSubtitleView().setStyle(
+                new CaptionStyleCompat(
+                    android.graphics.Color.WHITE,              // couleur du texte
+                    android.graphics.Color.TRANSPARENT,        // fond transparent
+                    android.graphics.Color.TRANSPARENT,        // fenêtre transparente
+                    CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,  // ombre portée pour lisibilité
+                    android.graphics.Color.BLACK,              // couleur de l'ombre
+                    null                                        // police par défaut
+                )
+            );
+        }
         
         // Configuration du titre dans le contrôleur si possible
         int titleId = getResources().getIdentifier("exo_title", "id", getPackageName());
@@ -243,7 +260,7 @@ public class PlayerActivity extends Activity {
         if (ccId != 0) {
             View ccBtn = playerView.findViewById(ccId);
             if (ccBtn != null) {
-                ccBtn.setOnClickListener(v -> showTrackDialog(androidx.media3.common.C.TRACK_TYPE_TEXT, "Sous-titres"));
+                ccBtn.setOnClickListener(v -> showSubtitleDialog());
                 ccBtn.setVisibility(View.VISIBLE);
             }
         }
@@ -351,7 +368,7 @@ public class PlayerActivity extends Activity {
                     showTrackDialog(androidx.media3.common.C.TRACK_TYPE_AUDIO, "Pistes Audio");
                     break;
                 case 2: // Sous-titres
-                    showTrackDialog(androidx.media3.common.C.TRACK_TYPE_TEXT, "Sous-titres");
+                    showSubtitleDialog();
                     break;
                 case 3: // Resize
                     showResizeDialog();
@@ -391,6 +408,35 @@ public class PlayerActivity extends Activity {
             .setTheme(R.style.CustomDialogTheme)
             .build()
             .show();
+    }
+
+    private void showSubtitleDialog() {
+        String[] options = {"Désactiver les sous-titres", "Choisir une piste de sous-titres"};
+        androidx.appcompat.app.AlertDialog.Builder builder =
+            new androidx.appcompat.app.AlertDialog.Builder(this, R.style.CustomDialogTheme);
+        builder.setTitle("Sous-titres");
+        builder.setItems(options, (dialog, which) -> {
+            if (which == 0) {
+                // Désactiver tous les sous-titres
+                player.setTrackSelectionParameters(
+                    player.getTrackSelectionParameters()
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                );
+                Toast.makeText(this, "Sous-titres désactivés", Toast.LENGTH_SHORT).show();
+            } else {
+                // Réactiver les pistes texte puis ouvrir le sélecteur natif
+                player.setTrackSelectionParameters(
+                    player.getTrackSelectionParameters()
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .build()
+                );
+                showTrackDialog(C.TRACK_TYPE_TEXT, "Piste de sous-titres");
+            }
+        });
+        builder.show();
     }
 
     private void showResizeDialog() {
