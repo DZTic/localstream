@@ -473,11 +473,8 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    @Override
-    public void onBackPressed() {
-        savePosition();
-        super.onBackPressed();
-    }
+    // La sauvegarde de la position est gérée par finish() (appelé par le retour),
+    // donc aucun override de onBackPressed() n'est nécessaire ici.
 
     private float startY = 0f;
     private float startX = 0f;

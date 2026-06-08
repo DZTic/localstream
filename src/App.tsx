@@ -1,7 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, CloudOff, RotateCcw, RotateCw, Pause, Clock, Plus, History, Home, Film } from 'lucide-react';
+import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, CloudOff, RotateCcw, RotateCw, Pause, Clock, Plus, History, Film } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
+import { VideoFile, Subtitle, Playlist, TMDB_GENRES } from './lib/types';
+import { srt2vtt, safeSetItem, getCleanTitle, getResolution, formatSize, formatDuration } from './lib/utils';
+import { osLogin, osSearch, osDownloadVtt } from './lib/opensubtitles';
+import { getPopular } from './lib/tmdb';
+import { filterAndSortVideos } from './lib/sorting';
+import { useTmdbMetadata } from './hooks/useTmdbMetadata';
+import { VideoRow } from './components/VideoRow';
+import { BottomNav } from './components/BottomNav';
 
 interface VideoLauncherPlugin {
   openVideo(options: { 
@@ -20,117 +28,6 @@ interface VideoLauncherPlugin {
 }
 
 const VideoLauncher = registerPlugin<VideoLauncherPlugin>('VideoLauncher');
-
-// Types
-interface VideoFile {
-  file?: File;
-  size?: number;
-  lastModified?: number;
-  url: string;
-  name: string;
-  type: string;
-  path: string;
-  nativeUri?: string;
-  subtitleNativePath?: string; // sous-titre auto-détecté (Android)
-  subtitleUrl?: string;        // sous-titre auto-détecté (web, blob URL)
-  seriesName?: string;
-  season?: number;
-  episode?: number;
-  isSeriesGroup?: boolean;
-  isTvSeries?: boolean;
-  episodes?: VideoFile[];
-  cleanTitle?: string;
-}
-
-interface Subtitle {
-  id: string;
-  language: string;
-  filename: string;
-  url?: string;
-}
-
-interface Playlist {
-  id: string;
-  name: string;
-  videoNames: string[];
-}
-
-const TMDB_GENRES: Record<number, string> = {
-  28: "Action", 12: "Aventure", 16: "Animation", 35: "Comédie", 80: "Crime", 99: "Documentaire", 18: "Drame", 10751: "Familial", 14: "Fantastique", 36: "Histoire", 27: "Horreur", 10402: "Musique", 9648: "Mystère", 10749: "Romance", 878: "Science-Fiction", 10770: "Téléfilm", 53: "Thriller", 10752: "Guerre", 37: "Western",
-  10759: "Action & Adventure", 10762: "Kids", 10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics"
-};
-
-// Convertit un fichier SRT en VTT
-const srt2vtt = (srt: string): string => {
-  let vtt = 'WEBVTT\n\n';
-  vtt += srt
-    .replace(/\{\\([ibu])\}/g, '<$1>')
-    .replace(/\{\\\/([ibu])\}/g, '</$1>')
-    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
-    .replace(/\r\n/g, '\n');
-  return vtt;
-};
-
-/**
- * Détecte si un fichier vidéo est une vidéo personnelle (souvenir, caméra téléphone, etc.)
- * basé uniquement sur le nom du fichier et son chemin.
- */
-const isPersonalVideo = (name: string, path: string): boolean => {
-  const n = name.toLowerCase();
-  const p = (path || '').toLowerCase().replace(/\\/g, '/');
-
-  // --- Patterns de chemins suspects ---
-  const suspectPaths = [
-    '/dcim/',
-    '/camera/',
-    '/whatsapp/',
-    '/snapchat/',
-    '/instagram/',
-    '/telegram/',
-    '/signal/',
-    '/viber/',
-    '/messenger/',
-    '/tiktok/',
-    '/recordings/',
-    '/screenrecord',
-    '/screen_record',
-    '/voicememos/',
-  ];
-  if (suspectPaths.some(sp => p.includes(sp))) return true;
-
-  // --- Patterns de noms de fichiers phones/caméscopes ---
-  const personalPatterns = [
-    // Android caméra standard : VID_20240315_143022
-    /^vid_\d{8}_\d{6}/,
-    // Android : 20240315_143022
-    /^\d{8}_\d{6}/,
-    // Android : 2024-03-15-14-30-22
-    /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}/,
-    // iPhone photo/vidéo : IMG_1234 ou MOV_1234 (sans titre, juste numéro)
-    /^(img|mov|dsc|dscn|dscf|mvc|mvc|sdc|vlc)_?\d{4,}/i,
-    // Caméscope Sony/Panasonic : C0001, M2U00001
-    /^(c|m2u|avchd|mts|m2ts)\d{4,}/i,
-    // GoPro
-    /^(gh|gx|gopr|gp)\d{4,}/i,
-    // DJI drone
-    /^dji_\d{4}/i,
-    // WhatsApp
-    /^whatsapp.*(video|vidéo|audio)/i,
-    // Snapchat
-    /^snapchat-\d+/i,
-    // Fichier purement numérique (aucune lettre hors extension)
-    /^\d+\.(mp4|mkv|avi|mov|webm)$/i,
-    // Format date ISO ou slash sans titre : 2024-03-15 14.30.22
-    /^\d{4}[-_.\s]\d{2}[-_.\s]\d{2}[\s_-]\d{2}[.:_]\d{2}/,
-    // Screen recording Android/Samsung
-    /^screen.?record/i,
-    // Format caméra sécurité / timelapse
-    /^\d{14}\.(mp4|avi|mkv)$/i,
-  ];
-
-  return personalPatterns.some(pattern => pattern.test(n));
-};
-
 
 export default function App() {
   const [videos, setVideos] = useState<VideoFile[]>([]);
@@ -157,7 +54,7 @@ export default function App() {
     setWhitelistedVideos(prev => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name); else next.add(name);
-      localStorage.setItem('whitelistedVideos', JSON.stringify([...next]));
+      safeSetItem('whitelistedVideos', JSON.stringify([...next]));
       return next;
     });
   };
@@ -208,7 +105,7 @@ export default function App() {
         }
       }
       
-      localStorage.setItem('watchedVideos', JSON.stringify(newState));
+      safeSetItem('watchedVideos', JSON.stringify(newState));
       return newState;
     });
   };
@@ -217,91 +114,20 @@ export default function App() {
     setWatchProgress(prev => {
       const newState = { ...prev };
       delete newState[videoName];
-      localStorage.setItem('watchProgress', JSON.stringify(newState));
+      safeSetItem('watchProgress', JSON.stringify(newState));
       return newState;
     });
     setWatchPositions(prev => {
       const newState = { ...prev };
       delete newState[videoName];
-      localStorage.setItem('watchPositions', JSON.stringify(newState));
+      safeSetItem('watchPositions', JSON.stringify(newState));
       return newState;
     });
   };
 
   const [tmdbApiKey, setTmdbApiKey] = useState(localStorage.getItem('tmdbApiKey') || '');
-  const [posters, setPosters] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('moviePosters');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-  const [backdrops, setBackdrops] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('movieBackdrops');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-  const [overviews, setOverviews] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('movieOverviews');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-  const [releaseDates, setReleaseDates] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('movieReleaseDates');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-  const [videoGenres, setVideoGenres] = useState<Record<string, number[]>>(() => {
-    try {
-      const saved = localStorage.getItem('movieGenres');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
   const [videoDurations, setVideoDurations] = useState<Record<string, number>>({});
-  const [tmdbIds, setTmdbIds] = useState<Record<string, number>>(() => {
-    try {
-      const saved = localStorage.getItem('tmdbIds');
-      return saved ? JSON.parse(saved) : {};
-    } catch { return {}; }
-  });
-  // movieCollections: videoName -> { id: collectionTmdbId, name: collectionName }
-  const [movieCollections, setMovieCollections] = useState<Record<string, { id: number; name: string }>>(() => {
-    try {
-      const saved = localStorage.getItem('movieCollections');
-      return saved ? JSON.parse(saved) : {};
-    } catch { return {}; }
-  });
-  const [episodeOverviews, setEpisodeOverviews] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('episodeOverviews');
-      return saved ? JSON.parse(saved) : {};
-    } catch { return {}; }
-  });
-  const [episodePosters, setEpisodePosters] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('episodePosters');
-      return saved ? JSON.parse(saved) : {};
-    } catch { return {}; }
-  });
-  const [episodeNames, setEpisodeNames] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('episodeNames');
-      return saved ? JSON.parse(saved) : {};
-    } catch { return {}; }
-  });
-  
+
   const [sortBy, setSortBy] = useState<'alpha' | 'date' | 'size' | 'duration'>('alpha');
   const [filterGenre, setFilterGenre] = useState<number | 'all'>('all');
   const [filterResolution, setFilterResolution] = useState<string | 'all'>('all');
@@ -395,7 +221,7 @@ export default function App() {
   const toggleForceAvailable = (videoName: string) => {
     setForceAvailableVideos(prev => {
       const newState = { ...prev, [videoName]: !prev[videoName] };
-      localStorage.setItem('forceAvailableVideos', JSON.stringify(newState));
+      safeSetItem('forceAvailableVideos', JSON.stringify(newState));
       return newState;
     });
   };
@@ -406,13 +232,13 @@ export default function App() {
     
     setWatchedVideos(prev => {
       const newState = { ...prev, [name]: true };
-      localStorage.setItem('watchedVideos', JSON.stringify(newState));
+      safeSetItem('watchedVideos', JSON.stringify(newState));
       return newState;
     });
     
     setForceAvailableVideos(prev => {
       const newState = { ...prev, [name]: true };
-      localStorage.setItem('forceAvailableVideos', JSON.stringify(newState));
+      safeSetItem('forceAvailableVideos', JSON.stringify(newState));
       return newState;
     });
 
@@ -420,11 +246,19 @@ export default function App() {
   };
   
   const [isScanning, setIsScanning] = useState(false);
-  const [isFetchingMetadata, setIsFetchingMetadata] = useState(false);
   const [diagLogs, setDiagLogs] = useState<string[]>([]);
   const addLog = (msg: string) => {
     setDiagLogs(prev => [new Date().toLocaleTimeString() + ": " + msg, ...prev].slice(0, 50));
   };
+
+  // Couche métadonnées TMDB (état + regroupement + récupération auto/manuelle)
+  const {
+    groupedVideos,
+    posters, backdrops, overviews, releaseDates, videoGenres, tmdbIds,
+    movieCollections, episodeOverviews, episodePosters, episodeNames,
+    isFetchingMetadata, isRefreshingMetadata,
+    fetchSingleMetadata,
+  } = useTmdbMetadata({ videos, whitelistedVideos, tmdbApiKey, addLog });
   const [permsNeeded, setPermsNeeded] = useState(false);
   const [externalPlayers, setExternalPlayers] = useState<{name: string, packageId: string}[]>([]);
   const [selectedExternalPlayer, setSelectedExternalPlayer] = useState<string>(localStorage.getItem('selectedExternalPlayer') || '');
@@ -451,11 +285,11 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    localStorage.setItem('watchPositions', JSON.stringify(watchPositions));
+    safeSetItem('watchPositions', JSON.stringify(watchPositions));
   }, [watchPositions]);
 
   useEffect(() => {
-    localStorage.setItem('playlists', JSON.stringify(playlists));
+    safeSetItem('playlists', JSON.stringify(playlists));
   }, [playlists]);
 
   useEffect(() => {
@@ -468,24 +302,19 @@ export default function App() {
 
   // Save credentials
   useEffect(() => {
-    localStorage.setItem('osApiKey', osApiKey);
-    localStorage.setItem('osUsername', osUsername);
-    localStorage.setItem('osPassword', osPassword);
-    localStorage.setItem('osToken', osToken);
-    localStorage.setItem('videoPlayer', videoPlayer);
-    localStorage.setItem('tmdbIds', JSON.stringify(tmdbIds));
-    localStorage.setItem('episodeOverviews', JSON.stringify(episodeOverviews));
-    localStorage.setItem('episodePosters', JSON.stringify(episodePosters));
-    localStorage.setItem('episodeNames', JSON.stringify(episodeNames));
-    localStorage.setItem('movieCollections', JSON.stringify(movieCollections));
-  }, [osApiKey, osUsername, osPassword, osToken, videoPlayer, tmdbIds, episodeOverviews, episodePosters, episodeNames, movieCollections]);
+    safeSetItem('osApiKey', osApiKey);
+    safeSetItem('osUsername', osUsername);
+    safeSetItem('osPassword', osPassword);
+    safeSetItem('osToken', osToken);
+    safeSetItem('videoPlayer', videoPlayer);
+  }, [osApiKey, osUsername, osPassword, osToken, videoPlayer]);
 
   useEffect(() => {
-    localStorage.setItem('tmdbApiKey', tmdbApiKey);
+    safeSetItem('tmdbApiKey', tmdbApiKey);
   }, [tmdbApiKey]);
 
   useEffect(() => {
-    localStorage.setItem('selectedExternalPlayer', selectedExternalPlayer);
+    safeSetItem('selectedExternalPlayer', selectedExternalPlayer);
   }, [selectedExternalPlayer]);
 
   const checkGlobalPermissions = async () => {
@@ -548,436 +377,7 @@ export default function App() {
     setIsEpisodeSynopsisExpanded(false);
   }, [infoVideo, expandedEpisode]);
 
-  useEffect(() => {
-    localStorage.setItem('moviePosters', JSON.stringify(posters));
-    localStorage.setItem('movieBackdrops', JSON.stringify(backdrops));
-    localStorage.setItem('movieOverviews', JSON.stringify(overviews));
-    localStorage.setItem('movieReleaseDates', JSON.stringify(releaseDates));
-    localStorage.setItem('movieGenres', JSON.stringify(videoGenres));
-    localStorage.setItem('episodeNames', JSON.stringify(episodeNames));
-    localStorage.setItem('episodeOverviews', JSON.stringify(episodeOverviews));
-    localStorage.setItem('episodePosters', JSON.stringify(episodePosters));
-  }, [posters, backdrops, overviews, releaseDates, videoGenres, episodeNames, episodeOverviews, episodePosters]);
-
-  const getCleanTitle = (filename: string) => {
-    let title = filename.replace(/\.[^/.]+$/, "");
-    title = title.replace(/[sS]\d+(\s*)?([eE]\d+)?|(\d+)(\s*)?x(\d+).*/i, "");
-    title = title.replace(/(19|20)\d{2}.*/, "");
-    title = title.replace(/[\.\-_]/g, " ");
-    title = title.replace(/1080p|720p|2160p|4k|bluray|webrip|hdtv|x264|x265|hevc|vostfr|french|truefrench/ig, "");
-    // Supprimer les parenthèses ou crochets orphelins à la fin après nettoyage de l'année
-    return title.trim().replace(/[\(\[\{]\s*$/, "").replace(/[\s\-\.\(\)\[\]\{\}]+$/, "").trim();
-  };
-
-  const groupedVideos = React.useMemo(() => {
-    const groups: Record<string, VideoFile> = {};
-    const standaloneVideos: VideoFile[] = [];
-
-    // Filtrer les vidéos personnelles (sauf celles whitelistées)
-    const filteredVideos = videos.filter(video =>
-      whitelistedVideos.has(video.name) || !isPersonalVideo(video.name, video.path || '')
-    );
-
-    filteredVideos.forEach(video => {
-      const match = video.name.match(/[sS](\d+)(\s*)[eE](\d+)|(\d+)(\s*)x(\d+)/i);
-      const isSeriesPattern = !!match;
-      
-      if (isSeriesPattern || video.seriesName) {
-        if (match) {
-          if (match[1]) {
-            video.season = parseInt(match[1]);
-            video.episode = parseInt(match[3]);
-          } else {
-            video.season = parseInt(match[4]);
-            video.episode = parseInt(match[6]);
-          }
-        }
-        
-        const sName = video.seriesName || (match ? video.name.substring(0, match.index).replace(/[\.\-_/\\\[\]\(\)]/g, " ").trim().replace(/[\s\-]+$/, "") : getCleanTitle(video.name));
-        const finalSeriesName = sName || "Série Inconnue";
-
-        if (!groups[finalSeriesName]) {
-          groups[finalSeriesName] = {
-            file: video.file,
-            url: video.url,
-            name: finalSeriesName,
-            type: 'series',
-            path: video.path,
-            isSeriesGroup: true,
-            isTvSeries: true,
-            episodes: [],
-            seriesName: finalSeriesName
-          };
-        }
-        groups[finalSeriesName].episodes!.push(video);
-      } else {
-        const cleanTitle = getCleanTitle(video.name);
-        standaloneVideos.push({ ...video, cleanTitle });
-      }
-    });
-
-    const seriesResult = Object.values(groups).map(group => {
-      group.episodes!.sort((a, b) => {
-        if (a.season !== b.season) return (a.season || 0) - (b.season || 0);
-        return (a.episode || 0) - (b.episode || 0);
-      });
-      const firstEp = group.episodes![0];
-      group.file = firstEp.file;
-      group.url = firstEp.url;
-      group.path = firstEp.path;
-      return group;
-    });
-
-    // Groupement des films en sagas via les collections TMDB
-    const collectionGroups: Record<string, { colName: string; films: VideoFile[] }> = {};
-    const usedVideoNames = new Set<string>();
-    const finalStandalone: VideoFile[] = [];
-
-    standaloneVideos.forEach(v => {
-      const col = movieCollections[v.name];
-      if (col) {
-        const key = `col_${col.id}`;
-        if (!collectionGroups[key]) collectionGroups[key] = { colName: col.name, films: [] };
-        collectionGroups[key].films.push(v);
-        usedVideoNames.add(v.name);
-      }
-    });
-
-    // Ne créer un groupe saga que s'il y a au moins 2 films locaux dans la collection
-    const groupedMovies: VideoFile[] = [];
-    Object.values(collectionGroups).forEach(({ colName, films }) => {
-      if (films.length > 1) {
-        films.sort((a, b) => {
-          const dA = releaseDates[a.name] || '';
-          const dB = releaseDates[b.name] || '';
-          return dA.localeCompare(dB) || a.name.localeCompare(b.name, undefined, { numeric: true });
-        });
-        const first = films[0];
-        groupedMovies.push({
-          ...first,
-          name: colName,
-          type: 'series',
-          isSeriesGroup: true,
-          isTvSeries: false,
-          episodes: films,
-          seriesName: colName
-        } as VideoFile);
-      } else {
-        // 1 seul film local dans la collection → laisser en standalone
-        films.forEach(f => usedVideoNames.delete(f.name));
-      }
-    });
-
-    standaloneVideos.forEach(v => {
-      if (!usedVideoNames.has(v.name)) {
-        finalStandalone.push(v);
-      }
-    });
-
-    return [...seriesResult, ...groupedMovies, ...finalStandalone];
-  }, [videos, movieCollections, releaseDates, whitelistedVideos]);
-
-  useEffect(() => {
-    const fetchAllMetadata = async () => {
-      if (!tmdbApiKey || groupedVideos.length === 0) {
-        if (!tmdbApiKey && groupedVideos.length > 0) addLog("Clé TMDB manquante !");
-        return;
-      }
-
-      setIsFetchingMetadata(true);
-      addLog(`Démarrage de la récupération pour ${groupedVideos.length} films/séries regroupés.`);
-
-      for (const video of groupedVideos) {
-        const lookupName = video.isSeriesGroup ? video.seriesName! : video.name;
-        const cleanTitle = video.isSeriesGroup ? video.seriesName! : getCleanTitle(video.name);
-        
-        // Skip Phase 1 if already have poster
-        let currentTvId = tmdbIds[lookupName];
-
-        if (!posters[lookupName] && cleanTitle) {
-          try {
-            // Cas spécial : groupe saga → utiliser l'API /collection/{id} directement
-            if (video.isSeriesGroup && !video.isTvSeries && video.episodes && video.episodes.length > 0) {
-              // Récupérer l'ID de collection depuis le premier film de la saga
-              const firstFilmCol = video.episodes
-                .map(ep => movieCollections[ep.name])
-                .find(col => !!col);
-
-              if (firstFilmCol?.id) {
-                const colUrl = `https://api.themoviedb.org/3/collection/${firstFilmCol.id}?api_key=${tmdbApiKey}&language=fr-FR`;
-                const colRes = await fetch(colUrl);
-                const colData = await colRes.json();
-
-                if (colData.id) {
-                  if (colData.poster_path) setPosters(prev => ({ ...prev, [lookupName]: `https://image.tmdb.org/t/p/w500${colData.poster_path}` }));
-                  if (colData.backdrop_path) setBackdrops(prev => ({ ...prev, [lookupName]: `https://image.tmdb.org/t/p/original${colData.backdrop_path}` }));
-                  if (colData.overview) setOverviews(prev => ({ ...prev, [lookupName]: colData.overview }));
-                  addLog(`Saga poster récupéré : ${lookupName}`);
-                }
-              }
-            } else {
-            const url = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`;
-            const res = await fetch(url);
-            const data = await res.json();
-            
-            if (data.results && data.results.length > 0) {
-              const results = data.results;
-              let result = results.find((r: any) => {
-                const name = (r.name || r.title || "").toLowerCase();
-                const search = cleanTitle.toLowerCase();
-                return name === search;
-              });
-
-              if (!result) {
-                if (video.isTvSeries) {
-                  result = results.find((r: any) => r.media_type === 'tv' && r.poster_path) || 
-                           results.find((r: any) => r.poster_path) || 
-                           results[0];
-                } else {
-                  result = results.find((r: any) => r.media_type === 'movie' && r.poster_path) || 
-                           results.find((r: any) => r.poster_path) || 
-                           results[0];
-                }
-              }
-
-              if (result) {
-                const updates: any = {};
-                if (result.poster_path) updates.poster = `https://image.tmdb.org/t/p/w500${result.poster_path}`;
-                if (result.backdrop_path) updates.backdrop = `https://image.tmdb.org/t/p/original${result.backdrop_path}`;
-                if (result.overview) updates.overview = result.overview;
-                if (result.release_date || result.first_air_date) updates.releaseDate = result.release_date || result.first_air_date;
-                if (result.genre_ids) updates.genres = result.genre_ids;
-                if (video.isTvSeries) {
-                  updates.tmdbId = result.id;
-                  currentTvId = result.id;
-                }
-
-                if (updates.poster) setPosters(prev => ({ ...prev, [lookupName]: updates.poster }));
-                if (updates.backdrop) setBackdrops(prev => ({ ...prev, [lookupName]: updates.backdrop }));
-                if (updates.overview) setOverviews(prev => ({ ...prev, [lookupName]: updates.overview }));
-                if (updates.releaseDate) setReleaseDates(prev => ({ ...prev, [lookupName]: updates.releaseDate }));
-                if (updates.genres) setVideoGenres(prev => ({ ...prev, [lookupName]: updates.genres }));
-                if (updates.tmdbId) setTmdbIds(prev => ({ ...prev, [lookupName]: updates.tmdbId }));
-                addLog(`Trouvé : ${cleanTitle}`);
-
-                // Phase 1b : Récupérer la collection TMDB pour les films standalone
-                if (!video.isSeriesGroup && result.media_type === 'movie' && result.id && !movieCollections[lookupName]) {
-                  try {
-                    const movieDetailUrl = `https://api.themoviedb.org/3/movie/${result.id}?api_key=${tmdbApiKey}&language=fr-FR`;
-                    const mRes = await fetch(movieDetailUrl);
-                    const mData = await mRes.json();
-                    if (mData.belongs_to_collection) {
-                      const col = { id: mData.belongs_to_collection.id, name: mData.belongs_to_collection.name };
-                      setMovieCollections(prev => {
-                        const updated = { ...prev, [lookupName]: col };
-                        localStorage.setItem('movieCollections', JSON.stringify(updated));
-                        return updated;
-                      });
-                      addLog(`Saga détectée : ${mData.belongs_to_collection.name} pour ${cleanTitle}`);
-                    }
-                  } catch (colErr) {
-                    console.warn('Erreur collection pour', cleanTitle, colErr);
-                  }
-                }
-              } else {
-                addLog(`Aucun résultat valide pour : ${cleanTitle}`);
-              }
-            } else {
-              addLog(`TMDB : Aucun résultat pour : ${cleanTitle}`);
-            }
-            } // fin else (non-saga)
-          } catch (error: any) {
-            addLog(`Erreur Phase 1 (${cleanTitle}) : ${error.message || error}`);
-            console.error("Error fetching Phase 1 for", lookupName, error);
-          }
-        }
-
-
-        // Phase 2: Episodes (if series)
-        if (video.isSeriesGroup && video.isTvSeries && currentTvId) {
-          addLog(`Episodes pour ${video.seriesName} (${video.episodes?.length} ep. locaux)...`);
-          const seasonsInLibrary = Array.from(new Set(video.episodes?.map(ep => ep.season ?? 1) || []));
-          
-          for (const seasonNum of seasonsInLibrary) {
-            const seasonCacheKey = `${currentTvId}_s${seasonNum}`;
-            if (episodeOverviews[seasonCacheKey]) continue; 
-
-            try {
-              const seasonUrl = `https://api.themoviedb.org/3/tv/${currentTvId}/season/${seasonNum}?api_key=${tmdbApiKey}&language=fr-FR`;
-              const sRes = await fetch(seasonUrl);
-              const sData = await sRes.json();
-              
-              if (sData.episodes) {
-                const epOverviewsUpdate: Record<string, string> = { [seasonCacheKey]: "LOADED" };
-                const epPostersUpdate: Record<string, string> = {};
-                const epNamesUpdate: Record<string, string> = {};
-
-                sData.episodes.forEach((ep: any) => {
-                  const epKey = `${lookupName}_s${ep.season_number}_e${ep.episode_number}`;
-                  epOverviewsUpdate[epKey] = ep.overview || "(Pas de synopsis disponible)";
-                  epNamesUpdate[epKey] = ep.name || `Épisode ${ep.episode_number}`;
-                  if (ep.still_path) epPostersUpdate[epKey] = `https://image.tmdb.org/t/p/w500${ep.still_path}`;
-                });
-
-                setEpisodeOverviews(prev => ({ ...prev, ...epOverviewsUpdate }));
-                setEpisodePosters(prev => ({ ...prev, ...epPostersUpdate }));
-                setEpisodeNames(prev => ({ ...prev, ...epNamesUpdate }));
-              }
-            } catch (err) {
-              console.error("Error fetching Phase 2 season", seasonNum, "for", lookupName, err);
-            }
-          }
-        }
-      }
-      setIsFetchingMetadata(false);
-      addLog("Récupération terminée.");
-    };
-
-    fetchAllMetadata();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupedVideos, tmdbApiKey]);
-
-  // useEffect séparé : détecter les sagas TMDB sur les films standalone bruts
-  useEffect(() => {
-    const fetchCollections = async () => {
-      if (!tmdbApiKey || videos.length === 0) return;
-
-      // Filtrer les films qui : ne sont pas une série et n'ont pas encore de collection enregistrée
-      const standalonefilms = videos.filter(v => {
-        const isSeriesEp = !!v.name.match(/[sS]\d+[eE]\d+|\d+x\d+/i) || !!v.seriesName;
-        return !isSeriesEp;
-      });
-
-      for (const video of standalonefilms) {
-        if (movieCollections[video.name]) continue; // déjà connu
-        const cleanTitle = getCleanTitle(video.name);
-        if (!cleanTitle) continue;
-
-        try {
-          // Cherche le film sur TMDB
-          const searchUrl = `https://api.themoviedb.org/3/search/movie?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`;
-          const res = await fetch(searchUrl);
-          const data = await res.json();
-          if (!data.results || data.results.length === 0) continue;
-
-          const result = data.results.find((r: any) =>
-            (r.title || '').toLowerCase() === cleanTitle.toLowerCase()
-          ) || data.results[0];
-
-          if (!result?.id) continue;
-
-          // Récupère les détails du film pour obtenir belongs_to_collection
-          const detailUrl = `https://api.themoviedb.org/3/movie/${result.id}?api_key=${tmdbApiKey}&language=fr-FR`;
-          const dRes = await fetch(detailUrl);
-          const dData = await dRes.json();
-
-          if (dData.belongs_to_collection) {
-            const col = { id: dData.belongs_to_collection.id, name: dData.belongs_to_collection.name };
-            setMovieCollections(prev => {
-              const updated = { ...prev, [video.name]: col };
-              localStorage.setItem('movieCollections', JSON.stringify(updated));
-              return updated;
-            });
-          }
-        } catch (e) {
-          // Silently ignore
-        }
-      }
-    };
-
-    fetchCollections();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videos, tmdbApiKey]);
-
   const extractedDurationsRef = useRef<Set<string>>(new Set());
-
-  const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
-
-  const fetchSingleMetadata = async (video: VideoFile) => {
-    if (!tmdbApiKey) return;
-    const lookupName = video.isSeriesGroup ? video.seriesName! : video.name;
-    const cleanTitle = video.isSeriesGroup ? video.seriesName! : getCleanTitle(video.name);
-    
-    setIsRefreshingMetadata(true);
-    addLog(`Rafraîchissement pour : ${cleanTitle}`);
-
-    try {
-      const url = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbApiKey}&query=${encodeURIComponent(cleanTitle)}&language=fr-FR`;
-      const res = await fetch(url);
-      const data = await res.json();
-      
-      if (data.results && data.results.length > 0) {
-        const results = data.results;
-        // Priority: Exact match
-        let result = results.find((r: any) => {
-          const name = (r.name || r.title || "").toLowerCase();
-          return name === cleanTitle.toLowerCase();
-        });
-
-        if (!result) {
-          if (video.isTvSeries) {
-            result = results.find((r: any) => r.media_type === 'tv' && r.poster_path) || 
-                     results.find((r: any) => r.poster_path) || 
-                     results[0];
-          } else {
-            result = results.find((r: any) => r.media_type === 'movie' && r.poster_path) || 
-                     results.find((r: any) => r.poster_path) || 
-                     results[0];
-          }
-        }
-
-        if (result) {
-          const updates: any = {};
-          if (result.poster_path) updates.poster = `https://image.tmdb.org/t/p/w500${result.poster_path}`;
-          if (result.backdrop_path) updates.backdrop = `https://image.tmdb.org/t/p/original${result.backdrop_path}`;
-          if (result.overview) updates.overview = result.overview;
-          if (result.release_date || result.first_air_date) updates.releaseDate = result.release_date || result.first_air_date;
-          if (result.genre_ids) updates.genres = result.genre_ids;
-          
-          let currentTvId = null;
-          if (video.isTvSeries) {
-            updates.tmdbId = result.id;
-            currentTvId = result.id;
-          }
-
-          if (updates.poster) setPosters(prev => ({ ...prev, [lookupName]: updates.poster }));
-          if (updates.backdrop) setBackdrops(prev => ({ ...prev, [lookupName]: updates.backdrop }));
-          if (updates.overview) setOverviews(prev => ({ ...prev, [lookupName]: updates.overview }));
-          if (updates.releaseDate) setReleaseDates(prev => ({ ...prev, [lookupName]: updates.releaseDate }));
-          if (updates.genres) setVideoGenres(prev => ({ ...prev, [lookupName]: updates.genres }));
-          if (updates.tmdbId) setTmdbIds(prev => ({ ...prev, [lookupName]: updates.tmdbId }));
-
-          // Part 2: Episodes
-          if (video.isSeriesGroup && video.isTvSeries && currentTvId) {
-            const seasonsInLibrary = Array.from(new Set(video.episodes?.map(ep => ep.season ?? 1) || []));
-            for (const seasonNum of seasonsInLibrary) {
-              const seasonUrl = `https://api.themoviedb.org/3/tv/${currentTvId}/season/${seasonNum}?api_key=${tmdbApiKey}&language=fr-FR`;
-              const sRes = await fetch(seasonUrl);
-              const sData = await sRes.json();
-              if (sData.episodes) {
-                const epOverviewsUpdate: Record<string, string> = {};
-                const epPostersUpdate: Record<string, string> = {};
-                const epNamesUpdate: Record<string, string> = {};
-                sData.episodes.forEach((ep: any) => {
-                  const epKey = `${lookupName}_s${ep.season_number}_e${ep.episode_number}`;
-                  epOverviewsUpdate[epKey] = ep.overview || "(Pas de synopsis disponible)";
-                  epNamesUpdate[epKey] = ep.name || `Épisode ${ep.episode_number}`;
-                  if (ep.still_path) epPostersUpdate[epKey] = `https://image.tmdb.org/t/p/w500${ep.still_path}`;
-                });
-                setEpisodeOverviews(prev => ({ ...prev, ...epOverviewsUpdate }));
-                setEpisodePosters(prev => ({ ...prev, ...epPostersUpdate }));
-                setEpisodeNames(prev => ({ ...prev, ...epNamesUpdate }));
-              }
-            }
-          }
-          addLog("Mise à jour réussie");
-        }
-      }
-    } catch (err) {
-      console.error("Manual refresh error", err);
-    }
-    setIsRefreshingMetadata(false);
-  };
 
   useEffect(() => {
     const extractDurations = async () => {
@@ -1099,6 +499,7 @@ export default function App() {
       const foldersToScan = [
         { dir: Directory.ExternalStorage, path: 'Movies' },
         { dir: Directory.ExternalStorage, path: 'Download' },
+        { dir: Directory.ExternalStorage, path: 'Downloads' },
         { dir: Directory.ExternalStorage, path: 'Documents' }
       ];
       
@@ -1229,7 +630,7 @@ export default function App() {
     // Ajout à l'historique (Recently Watched) - déplacé ici pour fonctionner sur toutes les plateformes
     setRecentlyWatched(prev => {
       const newWatched = [videoToPlay.name, ...prev.filter(name => name !== videoToPlay.name)].slice(0, 30);
-      localStorage.setItem('recentlyWatched', JSON.stringify(newWatched));
+      safeSetItem('recentlyWatched', JSON.stringify(newWatched));
       return newWatched;
     });
 
@@ -1259,7 +660,7 @@ export default function App() {
               setWatchPositions(prev => ({ ...prev, [videoToPlay.name]: pos }));
               setWatchProgress(prev => {
                 const newProgress = { ...prev, [videoToPlay.name]: percentage };
-                localStorage.setItem('watchProgress', JSON.stringify(newProgress));
+                safeSetItem('watchProgress', JSON.stringify(newProgress));
                 return newProgress;
               });
             }
@@ -1292,26 +693,12 @@ export default function App() {
       alert("Veuillez remplir tous les champs.");
       return;
     }
-    
+
     setIsLoggingIn(true);
     try {
-      const response = await fetch('/api/os/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: 'https://api.opensubtitles.com/api/v1/login',
-          method: 'POST',
-          headers: {
-            'Api-Key': osApiKey,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-          body: { username: osUsername, password: osPassword }
-        })
-      });
-      const data = await response.json();
-      if (data.token) {
-        setOsToken(data.token);
+      const token = await osLogin(osApiKey, osUsername, osPassword);
+      if (token) {
+        setOsToken(token);
         alert('Connexion réussie !');
       } else {
         alert('Erreur de connexion.');
@@ -1328,24 +715,7 @@ export default function App() {
     setIsSearchingSubs(true);
     try {
       const cleanName = currentVideo.name.replace(/\.(mp4|mkv|webm|avi|mov)$/i, '').replace(/[\.\-_]/g, ' ');
-      const response = await fetch('/api/os/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: `https://api.opensubtitles.com/api/v1/subtitles?query=${encodeURIComponent(cleanName)}&languages=fr,en`,
-          method: 'GET',
-          headers: { 'Api-Key': osApiKey, 'Accept': 'application/json' }
-        })
-      });
-      const data = await response.json();
-      if (data.data) {
-        const subs = data.data.map((item: any) => ({
-          id: item.attributes.files[0].file_id.toString(),
-          language: item.attributes.language,
-          filename: item.attributes.files[0].file_name,
-        }));
-        setSubtitles(subs);
-      }
+      setSubtitles(await osSearch(osApiKey, cleanName));
     } catch (error) {
       alert("Erreur lors de la recherche de sous-titres.");
     } finally {
@@ -1361,30 +731,8 @@ export default function App() {
       return;
     }
     try {
-      const response = await fetch('/api/os/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: 'https://api.opensubtitles.com/api/v1/download',
-          method: 'POST',
-          headers: {
-            'Api-Key': osApiKey,
-            'Authorization': `Bearer ${osToken}`,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          body: { file_id: parseInt(fileId) }
-        })
-      });
-      const data = await response.json();
-      if (data.link) {
-        const subResponse = await fetch('/api/os/proxy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: data.link, method: 'GET' })
-        });
-        const srtContent = await subResponse.text();
-        const vttContent = srt2vtt(srtContent);
+      const vttContent = await osDownloadVtt(osApiKey, osToken, fileId);
+      if (vttContent) {
         const blob = new Blob([vttContent], { type: 'text/vtt' });
         setActiveSubtitleUrl(URL.createObjectURL(blob));
         setShowSubtitlesModal(false);
@@ -1448,59 +796,12 @@ export default function App() {
 
   const folderNames = Object.keys(folders).sort();
 
-  const filteredAndSortedVideos = React.useMemo(() => {
-    let result = [...groupedVideos];
-
-    if (filterGenre !== 'all') {
-      result = result.filter(v => {
-        const lookupKey = v.isSeriesGroup ? v.seriesName! : v.name;
-        const genres = videoGenres[lookupKey];
-        return genres && genres.includes(filterGenre as number);
-      });
-    }
-
-    if (filterResolution !== 'all') {
-      result = result.filter(v => {
-        const nameLower = (v.isSeriesGroup ? (v.episodes![0]?.name || v.name) : v.name).toLowerCase();
-        if (filterResolution === '4k') return nameLower.includes('2160p') || nameLower.includes('4k');
-        if (filterResolution === '1080p') return nameLower.includes('1080p');
-        if (filterResolution === '720p') return nameLower.includes('720p');
-        if (filterResolution === 'sd') return !nameLower.match(/1080p|720p|2160p|4k/);
-        return true;
-      });
-    }
-
-    result.sort((a, b) => {
-      // Priorité aux vidéos non-vues (Sauf si on trie par date d'ajout où l'on veut peut être voir les derniers même si vus?)
-      // Mais d'après la demande de l'utilisateur "tout ce qui est en vu ne soit pas mis en avant", on trie les vus à la fin
-      const aWatched = a.isSeriesGroup ? a.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[a.name];
-      const bWatched = b.isSeriesGroup ? b.episodes?.every(ep => !!watchedVideos[ep.name]) : !!watchedVideos[b.name];
-      if (aWatched !== bWatched) return aWatched ? 1 : -1;
-
-      if (sortBy === 'alpha') {
-        const nameA = a.isSeriesGroup ? a.seriesName! : a.name;
-        const nameB = b.isSeriesGroup ? b.seriesName! : b.name;
-        return nameA.localeCompare(nameB);
-      } else if (sortBy === 'date') {
-        const lookupA = a.isSeriesGroup ? a.seriesName! : a.name;
-        const lookupB = b.isSeriesGroup ? b.seriesName! : b.name;
-        const dateA = releaseDates[lookupA] || (a.file?.lastModified || a.lastModified || 0).toString();
-        const dateB = releaseDates[lookupB] || (b.file?.lastModified || b.lastModified || 0).toString();
-        return dateB.localeCompare(dateA);
-      } else if (sortBy === 'size') {
-        const sizeA = a.isSeriesGroup ? a.episodes!.reduce((s, e) => s + (e.file?.size || e.size || 0), 0) : (a.file?.size || a.size || 0);
-        const sizeB = b.isSeriesGroup ? b.episodes!.reduce((s, e) => s + (e.file?.size || e.size || 0), 0) : (b.file?.size || b.size || 0);
-        return sizeB - sizeA;
-      } else if (sortBy === 'duration') {
-        const durA = a.isSeriesGroup ? a.episodes!.reduce((s, e) => s + (videoDurations[e.name] || 0), 0) : (videoDurations[a.name] || 0);
-        const durB = b.isSeriesGroup ? b.episodes!.reduce((s, e) => s + (videoDurations[e.name] || 0), 0) : (videoDurations[b.name] || 0);
-        return durB - durA;
-      }
-      return 0;
-    });
-
-    return result;
-  }, [groupedVideos, sortBy, filterGenre, filterResolution, releaseDates, videoGenres, videoDurations]);
+  const filteredAndSortedVideos = React.useMemo(
+    () => filterAndSortVideos(groupedVideos, {
+      sortBy, filterGenre, filterResolution, releaseDates, videoGenres, videoDurations, watchedVideos,
+    }),
+    [groupedVideos, sortBy, filterGenre, filterResolution, releaseDates, videoGenres, videoDurations, watchedVideos]
+  );
 
   const searchResults = searchQuery.trim() 
     ? filteredAndSortedVideos.filter(v => v.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -1545,117 +846,6 @@ export default function App() {
     if (v.isSeriesGroup) return v.episodes?.some(ep => !watchedVideos[ep.name]);
     return !watchedVideos[v.name];
   }) || recentAdditions[0] || groupedVideos[0];
-
-  const VideoRow: React.FC<{ title: string, items: VideoFile[] }> = ({ title, items }) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="mb-8">
-        <h2 className="text-lg md:text-2xl font-bold text-white mb-2 md:mb-4 px-4 md:px-12">{title}</h2>
-        <div className="flex gap-2 md:gap-3 overflow-x-auto px-4 md:px-12 pb-8 pt-2 scrollbar-hide snap-x">
-          {items.map((video, idx) => {
-            const isWatched = video.isSeriesGroup 
-              ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
-              : !!watchedVideos[video.name];
-            
-            return (
-              <div 
-                key={idx}
-                className="flex-none w-28 md:w-48 snap-start group"
-                onClick={() => handleOpenInfoModal(video)}
-              >
-                <div className={`relative aspect-[2/3] bg-zinc-900 rounded-md overflow-hidden cursor-pointer transition-all duration-300 group-hover:scale-105 group-hover:z-20 group-hover:ring-2 group-hover:ring-white/50 shadow-lg`}>
-                  {video.isSeriesGroup && (
-                    <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded shadow-lg uppercase">
-                      {video.isTvSeries ? 'Série' : 'Saga'}
-                    </div>
-                  )}
-                  {(video.isSeriesGroup 
-                      ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
-                      : !!watchedVideos[video.name]
-                    ) && (
-                    <div className="absolute top-2 right-2 z-20 bg-green-600 rounded-full p-1 shadow-md">
-                      <Check className="w-2.5 h-2.5 md:w-3 md:h-3 text-white" />
-                    </div>
-                  )}
-                  {posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)] ? (
-                    <img src={posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)]} alt={getCleanTitle(video.name)} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center p-2 md:p-4 text-center bg-zinc-800">
-                      <p className="text-xs md:text-sm font-medium text-zinc-300">
-                        {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
-                      </p>
-                    </div>
-                  )}
-                  {getResolution(video.name) && (
-                    <div className="absolute bottom-2 left-2 z-10 bg-black/60 backdrop-blur-sm text-white text-[8px] md:text-[10px] font-black px-1.5 py-0.5 rounded border border-white/20 uppercase tracking-tighter">
-                      {getResolution(video.name)}
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors hidden md:flex flex-col items-center justify-center gap-4 pointer-events-none">
-                    <button onClick={(e) => { e.stopPropagation(); playVideo(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 bg-white text-black p-3 rounded-full hover:bg-white/80">
-                      <Play className="w-6 h-6 fill-black" />
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleOpenInfoModal(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 delay-75 bg-zinc-800/80 text-white p-3 rounded-full hover:bg-zinc-700/80 border border-white/20">
-                      <Info className="w-6 h-6" />
-                    </button>
-                  </div>
-                  
-                  {watchProgress[video.name] > 0 && watchProgress[video.name] < 100 && (
-                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
-                      <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
-                    </div>
-                  )}
-                  {title === "Continuer la lecture" && watchProgress[video.name] > 0 && (
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); resetProgress(video.name); }}
-                      className="absolute bottom-2 right-2 p-1.5 md:p-1 bg-black/60 rounded-full text-white pointer-events-auto hover:bg-red-600 transition-colors shadow-lg z-30 opacity-100 md:opacity-0 group-hover:opacity-100"
-                      title="Reprendre à zéro"
-                    >
-                      <RotateCcw className="w-4 h-4 md:w-3 md:h-3" />
-                    </button>
-                  )}
-                </div>
-                
-                {/* Titre visible en entier en dessous */}
-                <div className="mt-2 px-1">
-                  <p className="text-[10px] md:text-sm font-medium text-zinc-300 leading-tight break-words">
-                    {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-
-  const formatSize = (bytes: number) => {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const formatDuration = (seconds: number) => {
-    if (!seconds) return 'Inconnue';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
-
-  const getResolution = (name: string) => {
-    const n = name.toLowerCase();
-    if (n.includes('2160p') || n.includes('4k') || n.includes('uhd')) return '4K';
-    if (n.includes('1440p')) return '2K';
-    if (n.includes('1080p') || n.includes('fhd')) return '1080p';
-    if (n.includes('720p') || n.includes('hd')) return '720p';
-    if (n.includes('480p') || n.includes('sd')) return 'SD';
-    return '';
-  };
 
   const createPlaylist = () => {
     if (!newPlaylistName.trim()) return;
@@ -1730,11 +920,21 @@ export default function App() {
     }
   };
 
+  // Props partagées par toutes les lignes de carrousel (cf. components/VideoRow)
+  const rowProps = {
+    posters,
+    watchProgress,
+    watchedVideos,
+    onOpenInfo: handleOpenInfoModal,
+    onPlay: playVideo,
+    onResetProgress: resetProgress,
+  };
+
   const handleVideoEnded = () => {
     if (currentVideo) {
       setWatchProgress(prev => {
         const newProgress = { ...prev, [currentVideo.name]: 100 };
-        localStorage.setItem('watchProgress', JSON.stringify(newProgress));
+        safeSetItem('watchProgress', JSON.stringify(newProgress));
         return newProgress;
       });
       if (!watchedVideos[currentVideo.name]) {
@@ -1767,7 +967,7 @@ export default function App() {
       // Update state if difference is > 1% or if it's finished
       if (Math.abs(percentage - prevPercentage) > 1 || percentage === 100) {
         const newProgress = { ...prev, [currentVideo.name]: percentage };
-        localStorage.setItem('watchProgress', JSON.stringify(newProgress));
+        safeSetItem('watchProgress', JSON.stringify(newProgress));
         
         return newProgress;
       }
@@ -2112,7 +1312,7 @@ export default function App() {
                                 >
                                   <div className={`relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden cursor-pointer transition-transform duration-300 group-hover:scale-105 group-hover:z-30 shadow-lg`}>
                                     {posters[video.name] ? (
-                                      <img src={posters[video.name]} alt={getCleanTitle(video.name)} className="w-full h-full object-cover" />
+                                      <img src={posters[video.name]} alt={getCleanTitle(video.name)} className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                     ) : (
                                       <div className="w-full h-full flex items-center justify-center p-4 text-center">
                                         <span className="text-zinc-500 font-medium text-sm">{getCleanTitle(video.name)}</span>
@@ -2236,7 +1436,7 @@ export default function App() {
                             >
                               <div className={`relative aspect-[2/3] bg-zinc-800 rounded-md overflow-hidden transition-transform duration-300 shadow-lg ${(item.isLocal || item.isForcedAvailable) ? 'cursor-pointer group-hover:scale-105 group-hover:z-30' : 'opacity-60'}`}>
                                 {posters[item.id] ? (
-                                  <img src={posters[item.id]} alt={getCleanTitle(item.name)} className={`w-full h-full object-cover ${(!item.isLocal && !item.isForcedAvailable) ? 'grayscale opacity-50' : ''}`} />
+                                  <img src={posters[item.id]} alt={getCleanTitle(item.name)} className={`w-full h-full object-cover ${(!item.isLocal && !item.isForcedAvailable) ? 'grayscale opacity-50' : ''}`} loading="lazy" decoding="async" />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center p-4 text-center">
                                     <span className="text-zinc-500 font-medium text-sm">{getCleanTitle(item.name)}</span>
@@ -2474,12 +1674,12 @@ export default function App() {
                     {/* Rows */}
                     <div className="relative z-20 -mt-12 md:-mt-24">
                       {inProgressVideos.length > 0 && (
-                        <VideoRow title="Continuer la lecture" items={inProgressVideos} />
+                        <VideoRow title="Continuer la lecture" items={inProgressVideos} {...rowProps} />
                       )}
-                      <VideoRow title="Nouveautés" items={recentAdditions.slice(0, 15)} />
-                      <VideoRow title="Recommandations" items={recommendations.slice(0, 15)} />
-                      <VideoRow title="Séries" items={tvShows} />
-                      <VideoRow title="Films" items={movies} />
+                      <VideoRow title="Nouveautés" items={recentAdditions.slice(0, 15)} {...rowProps} />
+                      <VideoRow title="Recommandations" items={recommendations.slice(0, 15)} {...rowProps} />
+                      <VideoRow title="Séries" items={tvShows} {...rowProps} />
+                      <VideoRow title="Films" items={movies} {...rowProps} />
                       
                       {/* Dossiers */}
                       {folderNames.map(folderName => {
@@ -2487,11 +1687,11 @@ export default function App() {
                         if (isSystemFolder) return null;
                         
                         return folders[folderName].length > 0 && (
-                          <VideoRow key={folderName} title={`Dossier : ${folderName}`} items={folders[folderName]} />
+                          <VideoRow key={folderName} title={`Dossier : ${folderName}`} items={folders[folderName]} {...rowProps} />
                         );
                       })}
 
-                      <VideoRow title="De A à Z" items={alphabetical} />
+                      <VideoRow title="De A à Z" items={alphabetical} {...rowProps} />
                     </div>
                   </>
                 )
@@ -2504,49 +1704,24 @@ export default function App() {
       }
 
       {videos.length > 0 && !currentVideo && (
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-zinc-950/90 backdrop-blur-md border-t border-white/10 z-40 flex items-center justify-around pb-safe pt-2 px-2" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 8px)' }}>
-          <button
-            onClick={() => {
-              setActiveTab('home');
-              setSearchQuery('');
-              setSortBy('alpha');
-              setFilterGenre('all');
-              setFilterResolution('all');
-              setSelectedPlaylist(null);
-            }}
-            className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'home' && !isLibraryViewActive ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <Home className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Accueil</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('home');
-              setSortBy('date');
-            }}
-            className={`flex flex-col items-center p-2 transition-colors ${isLibraryViewActive ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <Film className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Bibliothèque</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('playlists')}
-            className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'playlists' ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <ListVideo className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Listes</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'history' ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <History className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Déjà vu</span>
-          </button>
-        </nav>
+        <BottomNav
+          activeTab={activeTab}
+          isLibraryViewActive={isLibraryViewActive}
+          onHome={() => {
+            setActiveTab('home');
+            setSearchQuery('');
+            setSortBy('alpha');
+            setFilterGenre('all');
+            setFilterResolution('all');
+            setSelectedPlaylist(null);
+          }}
+          onLibrary={() => {
+            setActiveTab('home');
+            setSortBy('date');
+          }}
+          onPlaylists={() => setActiveTab('playlists')}
+          onHistory={() => setActiveTab('history')}
+        />
       )}
     </main>
 
@@ -3118,7 +2293,7 @@ export default function App() {
                         onClick={async () => {
                           addLog("Test de la clé API...");
                           try {
-                            const r = await fetch(`https://api.themoviedb.org/3/movie/popular?api_key=${tmdbApiKey}`);
+                            const r = await getPopular(tmdbApiKey);
                             if (r.ok) addLog("Test API réussi !");
                             else addLog("Test API échoué - Code : " + r.status);
                           } catch(e: any) { addLog("Erreur test : " + e.message); }
