@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getCleanTitle, isPersonalVideo, srt2vtt } from '../utils';
+import { getCleanTitle, isPersonalVideo, srt2vtt, getResolution, formatSize, formatDuration } from '../utils';
 import { posterUrl, backdropUrl, stillUrl } from '../tmdb';
 import { groupVideos } from '../grouping';
 import { filterAndSortVideos } from '../sorting';
@@ -47,6 +47,33 @@ describe('srt2vtt', () => {
     const out = srt2vtt(srt);
     expect(out.startsWith('WEBVTT')).toBe(true);
     expect(out).toContain('00:00:01.000 --> 00:00:04.000');
+  });
+});
+
+describe('getResolution', () => {
+  it('reconnaît 4K, 1080p, 720p', () => {
+    expect(getResolution('Film.2160p.mkv')).toBe('4K');
+    expect(getResolution('Film.1080p.mkv')).toBe('1080p');
+    expect(getResolution('Film.720p.mkv')).toBe('720p');
+  });
+  it('renvoie une chaîne vide si rien', () => {
+    expect(getResolution('Film.mkv')).toBe('');
+  });
+});
+
+describe('formatSize', () => {
+  it('formate les octets', () => {
+    expect(formatSize(0)).toBe('0 B');
+    expect(formatSize(1024)).toBe('1 KB');
+    expect(formatSize(1024 * 1024 * 1024)).toBe('1 GB');
+  });
+});
+
+describe('formatDuration', () => {
+  it('formate heures et minutes', () => {
+    expect(formatDuration(0)).toBe('Inconnue');
+    expect(formatDuration(90)).toBe('1m');
+    expect(formatDuration(3660)).toBe('1h 1m');
   });
 });
 

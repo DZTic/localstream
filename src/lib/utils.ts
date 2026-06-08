@@ -14,6 +14,24 @@ export const getCleanTitle = (filename: string): string => {
   return title.trim().replace(/[\(\[\{]\s*$/, "").replace(/[\s\-\.\(\)\[\]\{\}]+$/, "").trim();
 };
 
+/** Formate une taille en octets en chaîne lisible (B/KB/MB/GB/TB). */
+export const formatSize = (bytes: number): string => {
+  if (!bytes) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+/** Formate une durée en secondes en "Xh Ym" (ou "Ym"). */
+export const formatDuration = (seconds: number): string => {
+  if (!seconds) return 'Inconnue';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+
 /** Devine la résolution affichable (4K/2K/1080p/720p/SD) depuis le nom de fichier. */
 export const getResolution = (name: string): string => {
   const n = name.toLowerCase();

@@ -1,14 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, CloudOff, RotateCcw, RotateCw, Pause, Clock, Plus, History, Home, Film } from 'lucide-react';
+import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles, LogIn, Image as ImageIcon, Info, ListPlus, Check, Trash2, ListVideo, RefreshCw, Cloud, CloudOff, RotateCcw, RotateCw, Pause, Clock, Plus, History, Film } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { VideoFile, Subtitle, Playlist, TMDB_GENRES } from './lib/types';
-import { srt2vtt, safeSetItem, getCleanTitle, getResolution } from './lib/utils';
+import { srt2vtt, safeSetItem, getCleanTitle, getResolution, formatSize, formatDuration } from './lib/utils';
 import { osLogin, osSearch, osDownloadVtt } from './lib/opensubtitles';
 import { getPopular } from './lib/tmdb';
 import { filterAndSortVideos } from './lib/sorting';
 import { useTmdbMetadata } from './hooks/useTmdbMetadata';
 import { VideoRow } from './components/VideoRow';
+import { BottomNav } from './components/BottomNav';
 
 interface VideoLauncherPlugin {
   openVideo(options: { 
@@ -845,22 +846,6 @@ export default function App() {
     if (v.isSeriesGroup) return v.episodes?.some(ep => !watchedVideos[ep.name]);
     return !watchedVideos[v.name];
   }) || recentAdditions[0] || groupedVideos[0];
-
-  const formatSize = (bytes: number) => {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const formatDuration = (seconds: number) => {
-    if (!seconds) return 'Inconnue';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
 
   const createPlaylist = () => {
     if (!newPlaylistName.trim()) return;
@@ -1719,49 +1704,24 @@ export default function App() {
       }
 
       {videos.length > 0 && !currentVideo && (
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-zinc-950/90 backdrop-blur-md border-t border-white/10 z-40 flex items-center justify-around pb-safe pt-2 px-2" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 8px)' }}>
-          <button
-            onClick={() => {
-              setActiveTab('home');
-              setSearchQuery('');
-              setSortBy('alpha');
-              setFilterGenre('all');
-              setFilterResolution('all');
-              setSelectedPlaylist(null);
-            }}
-            className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'home' && !isLibraryViewActive ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <Home className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Accueil</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('home');
-              setSortBy('date');
-            }}
-            className={`flex flex-col items-center p-2 transition-colors ${isLibraryViewActive ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <Film className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Bibliothèque</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('playlists')}
-            className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'playlists' ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <ListVideo className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Listes</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'history' ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'}`}
-          >
-            <History className="w-6 h-6 mb-1" />
-            <span className="text-[10px] font-bold">Déjà vu</span>
-          </button>
-        </nav>
+        <BottomNav
+          activeTab={activeTab}
+          isLibraryViewActive={isLibraryViewActive}
+          onHome={() => {
+            setActiveTab('home');
+            setSearchQuery('');
+            setSortBy('alpha');
+            setFilterGenre('all');
+            setFilterResolution('all');
+            setSelectedPlaylist(null);
+          }}
+          onLibrary={() => {
+            setActiveTab('home');
+            setSortBy('date');
+          }}
+          onPlaylists={() => setActiveTab('playlists')}
+          onHistory={() => setActiveTab('history')}
+        />
       )}
     </main>
 
