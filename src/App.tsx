@@ -3,11 +3,12 @@ import { Settings, FolderOpen, Play, Search, X, Download, ChevronLeft, Subtitles
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { VideoFile, Subtitle, Playlist, TMDB_GENRES } from './lib/types';
-import { srt2vtt, safeSetItem, getCleanTitle } from './lib/utils';
+import { srt2vtt, safeSetItem, getCleanTitle, getResolution } from './lib/utils';
 import { osLogin, osSearch, osDownloadVtt } from './lib/opensubtitles';
 import { getPopular } from './lib/tmdb';
 import { filterAndSortVideos } from './lib/sorting';
 import { useTmdbMetadata } from './hooks/useTmdbMetadata';
+import { VideoRow } from './components/VideoRow';
 
 interface VideoLauncherPlugin {
   openVideo(options: { 
@@ -845,91 +846,6 @@ export default function App() {
     return !watchedVideos[v.name];
   }) || recentAdditions[0] || groupedVideos[0];
 
-  const VideoRow: React.FC<{ title: string, items: VideoFile[] }> = ({ title, items }) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="mb-8">
-        <h2 className="text-lg md:text-2xl font-bold text-white mb-2 md:mb-4 px-4 md:px-12">{title}</h2>
-        <div className="flex gap-2 md:gap-3 overflow-x-auto px-4 md:px-12 pb-8 pt-2 scrollbar-hide snap-x">
-          {items.map((video, idx) => {
-            const isWatched = video.isSeriesGroup 
-              ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
-              : !!watchedVideos[video.name];
-            
-            return (
-              <div 
-                key={idx}
-                className="flex-none w-28 md:w-48 snap-start group"
-                onClick={() => handleOpenInfoModal(video)}
-              >
-                <div className={`relative aspect-[2/3] bg-zinc-900 rounded-md overflow-hidden cursor-pointer transition-all duration-300 group-hover:scale-105 group-hover:z-20 group-hover:ring-2 group-hover:ring-white/50 shadow-lg`}>
-                  {video.isSeriesGroup && (
-                    <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded shadow-lg uppercase">
-                      {video.isTvSeries ? 'Série' : 'Saga'}
-                    </div>
-                  )}
-                  {(video.isSeriesGroup 
-                      ? (video.episodes && video.episodes.length > 0 && video.episodes.every(ep => !!watchedVideos[ep.name]))
-                      : !!watchedVideos[video.name]
-                    ) && (
-                    <div className="absolute top-2 right-2 z-20 bg-green-600 rounded-full p-1 shadow-md">
-                      <Check className="w-2.5 h-2.5 md:w-3 md:h-3 text-white" />
-                    </div>
-                  )}
-                  {posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)] ? (
-                    <img src={posters[video.isSeriesGroup ? video.seriesName! : (video.seriesName || video.name)]} alt={getCleanTitle(video.name)} className="w-full h-full object-cover" loading="lazy" decoding="async" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center p-2 md:p-4 text-center bg-zinc-800">
-                      <p className="text-xs md:text-sm font-medium text-zinc-300">
-                        {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
-                      </p>
-                    </div>
-                  )}
-                  {getResolution(video.name) && (
-                    <div className="absolute bottom-2 left-2 z-10 bg-black/60 backdrop-blur-sm text-white text-[8px] md:text-[10px] font-black px-1.5 py-0.5 rounded border border-white/20 uppercase tracking-tighter">
-                      {getResolution(video.name)}
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors hidden md:flex flex-col items-center justify-center gap-4 pointer-events-none">
-                    <button onClick={(e) => { e.stopPropagation(); playVideo(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 bg-white text-black p-3 rounded-full hover:bg-white/80">
-                      <Play className="w-6 h-6 fill-black" />
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleOpenInfoModal(video); }} className="pointer-events-auto opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-4 group-hover:translate-y-0 duration-300 delay-75 bg-zinc-800/80 text-white p-3 rounded-full hover:bg-zinc-700/80 border border-white/20">
-                      <Info className="w-6 h-6" />
-                    </button>
-                  </div>
-                  
-                  {watchProgress[video.name] > 0 && watchProgress[video.name] < 100 && (
-                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-600">
-                      <div className="h-full bg-red-600" style={{ width: `${watchProgress[video.name]}%` }} />
-                    </div>
-                  )}
-                  {title === "Continuer la lecture" && watchProgress[video.name] > 0 && (
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); resetProgress(video.name); }}
-                      className="absolute bottom-2 right-2 p-1.5 md:p-1 bg-black/60 rounded-full text-white pointer-events-auto hover:bg-red-600 transition-colors shadow-lg z-30 opacity-100 md:opacity-0 group-hover:opacity-100"
-                      title="Reprendre à zéro"
-                    >
-                      <RotateCcw className="w-4 h-4 md:w-3 md:h-3" />
-                    </button>
-                  )}
-                </div>
-                
-                {/* Titre visible en entier en dessous */}
-                <div className="mt-2 px-1">
-                  <p className="text-[10px] md:text-sm font-medium text-zinc-300 leading-tight break-words">
-                    {video.isSeriesGroup ? video.seriesName : (video.seriesName || getCleanTitle(video.name))}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-
   const formatSize = (bytes: number) => {
     if (!bytes) return '0 B';
     const k = 1024;
@@ -944,16 +860,6 @@ export default function App() {
     const m = Math.floor((seconds % 3600) / 60);
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
-  };
-
-  const getResolution = (name: string) => {
-    const n = name.toLowerCase();
-    if (n.includes('2160p') || n.includes('4k') || n.includes('uhd')) return '4K';
-    if (n.includes('1440p')) return '2K';
-    if (n.includes('1080p') || n.includes('fhd')) return '1080p';
-    if (n.includes('720p') || n.includes('hd')) return '720p';
-    if (n.includes('480p') || n.includes('sd')) return 'SD';
-    return '';
   };
 
   const createPlaylist = () => {
@@ -1027,6 +933,16 @@ export default function App() {
     } else {
       setSelectedSeason(null);
     }
+  };
+
+  // Props partagées par toutes les lignes de carrousel (cf. components/VideoRow)
+  const rowProps = {
+    posters,
+    watchProgress,
+    watchedVideos,
+    onOpenInfo: handleOpenInfoModal,
+    onPlay: playVideo,
+    onResetProgress: resetProgress,
   };
 
   const handleVideoEnded = () => {
@@ -1773,12 +1689,12 @@ export default function App() {
                     {/* Rows */}
                     <div className="relative z-20 -mt-12 md:-mt-24">
                       {inProgressVideos.length > 0 && (
-                        <VideoRow title="Continuer la lecture" items={inProgressVideos} />
+                        <VideoRow title="Continuer la lecture" items={inProgressVideos} {...rowProps} />
                       )}
-                      <VideoRow title="Nouveautés" items={recentAdditions.slice(0, 15)} />
-                      <VideoRow title="Recommandations" items={recommendations.slice(0, 15)} />
-                      <VideoRow title="Séries" items={tvShows} />
-                      <VideoRow title="Films" items={movies} />
+                      <VideoRow title="Nouveautés" items={recentAdditions.slice(0, 15)} {...rowProps} />
+                      <VideoRow title="Recommandations" items={recommendations.slice(0, 15)} {...rowProps} />
+                      <VideoRow title="Séries" items={tvShows} {...rowProps} />
+                      <VideoRow title="Films" items={movies} {...rowProps} />
                       
                       {/* Dossiers */}
                       {folderNames.map(folderName => {
@@ -1786,11 +1702,11 @@ export default function App() {
                         if (isSystemFolder) return null;
                         
                         return folders[folderName].length > 0 && (
-                          <VideoRow key={folderName} title={`Dossier : ${folderName}`} items={folders[folderName]} />
+                          <VideoRow key={folderName} title={`Dossier : ${folderName}`} items={folders[folderName]} {...rowProps} />
                         );
                       })}
 
-                      <VideoRow title="De A à Z" items={alphabetical} />
+                      <VideoRow title="De A à Z" items={alphabetical} {...rowProps} />
                     </div>
                   </>
                 )

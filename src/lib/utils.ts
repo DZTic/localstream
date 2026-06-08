@@ -14,6 +14,17 @@ export const getCleanTitle = (filename: string): string => {
   return title.trim().replace(/[\(\[\{]\s*$/, "").replace(/[\s\-\.\(\)\[\]\{\}]+$/, "").trim();
 };
 
+/** Devine la résolution affichable (4K/2K/1080p/720p/SD) depuis le nom de fichier. */
+export const getResolution = (name: string): string => {
+  const n = name.toLowerCase();
+  if (n.includes('2160p') || n.includes('4k') || n.includes('uhd')) return '4K';
+  if (n.includes('1440p')) return '2K';
+  if (n.includes('1080p') || n.includes('fhd')) return '1080p';
+  if (n.includes('720p') || n.includes('hd')) return '720p';
+  if (n.includes('480p') || n.includes('sd')) return 'SD';
+  return '';
+};
+
 // Convertit un fichier SRT en VTT
 export const srt2vtt = (srt: string): string => {
   let vtt = 'WEBVTT\n\n';
