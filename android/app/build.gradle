@@ -1,4 +1,17 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+// --- Versionnement : package.json comme source unique de vérité ---
+// versionName = champ "version" de package.json (ex. "1.2.3")
+// versionCode = dérivé du semver : MAJEUR*10000 + MINEUR*100 + CORRECTIF
+//   (1.0.0 -> 10000, 1.0.1 -> 10001, 1.1.0 -> 10100, 2.0.0 -> 20000)
+// => incrémenter la version dans package.json suffit pour publier une mise à jour.
+def pkgVersion = (new JsonSlurper().parse(file("$rootDir/../package.json"))).version as String
+def semverMatcher = (pkgVersion =~ /(\d+)\.(\d+)\.(\d+)/)
+def computedVersionCode = semverMatcher.find()
+        ? (semverMatcher.group(1).toInteger() * 10000 + semverMatcher.group(2).toInteger() * 100 + semverMatcher.group(3).toInteger())
+        : 1
 
 android {
     namespace = "com.localstream.app"
@@ -7,8 +20,8 @@ android {
         applicationId "com.localstream.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode computedVersionCode
+        versionName pkgVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
