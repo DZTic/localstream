@@ -356,7 +356,9 @@ public class PlayerActivity extends Activity {
     }
 
     private void showSettingsDialog() {
-        String[] options = {"Vitesse de lecture", "Pistes Audio", "Sous-titres", "Dimension de l'écran", "Ajouter un fichier de sous-titres (.srt, .vtt)"};
+        // L'ajout d'un fichier de sous-titres est regroupé dans le menu "Sous-titres"
+        // (cf. showSubtitleDialog) pour éviter deux entrées redondantes.
+        String[] options = {"Vitesse de lecture", "Pistes Audio", "Sous-titres", "Dimension de l'écran"};
         androidx.appcompat.app.AlertDialog.Builder builder = new androidx.appcompat.app.AlertDialog.Builder(this, R.style.CustomDialogTheme);
         builder.setTitle("Options du lecteur");
         builder.setItems(options, (dialog, which) -> {
@@ -372,9 +374,6 @@ public class PlayerActivity extends Activity {
                     break;
                 case 3: // Resize
                     showResizeDialog();
-                    break;
-                case 4: // Ajout manuel
-                    pickLocalSubtitle();
                     break;
             }
         });
@@ -411,7 +410,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void showSubtitleDialog() {
-        String[] options = {"Désactiver les sous-titres", "Choisir une piste de sous-titres"};
+        String[] options = {"Désactiver les sous-titres", "Choisir une piste de sous-titres", "Ajouter un fichier (.srt, .vtt)…"};
         androidx.appcompat.app.AlertDialog.Builder builder =
             new androidx.appcompat.app.AlertDialog.Builder(this, R.style.CustomDialogTheme);
         builder.setTitle("Sous-titres");
@@ -425,7 +424,7 @@ public class PlayerActivity extends Activity {
                         .build()
                 );
                 Toast.makeText(this, "Sous-titres désactivés", Toast.LENGTH_SHORT).show();
-            } else {
+            } else if (which == 1) {
                 // Réactiver les pistes texte puis ouvrir le sélecteur natif
                 player.setTrackSelectionParameters(
                     player.getTrackSelectionParameters()
@@ -434,6 +433,9 @@ public class PlayerActivity extends Activity {
                         .build()
                 );
                 showTrackDialog(C.TRACK_TYPE_TEXT, "Piste de sous-titres");
+            } else {
+                // Ajouter un fichier de sous-titres externe (.srt, .vtt)
+                pickLocalSubtitle();
             }
         });
         builder.show();
