@@ -1839,7 +1839,7 @@ export default function App() {
                         <span className="hidden sm:inline">MA LISTE</span>
                       </button>
                       {showPlaylistSelector && (
-                        <div className="absolute bottom-full mb-4 left-0 md:left-auto md:right-0 w-80 bg-zinc-900/90 border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-50 overflow-hidden backdrop-blur-2xl animate-in fade-in slide-in-from-bottom-6 duration-500">
+                        <div className="absolute bottom-full mb-4 right-0 w-[min(20rem,calc(100vw_-_2rem))] md:w-80 bg-zinc-900/90 border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-50 overflow-hidden backdrop-blur-2xl animate-in fade-in slide-in-from-bottom-6 duration-500">
                           <div className="p-5 bg-gradient-to-b from-zinc-800/50 to-transparent border-b border-white/5">
                             <h4 className="text-xs font-black text-white/40 uppercase tracking-[0.32em] mb-4">Mes Listes</h4>
                             <div className="max-h-64 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
