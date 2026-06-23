@@ -13,6 +13,17 @@ def computedVersionCode = semverMatcher.find()
         ? (semverMatcher.group(1).toInteger() * 10000 + semverMatcher.group(2).toInteger() * 100 + semverMatcher.group(3).toInteger())
         : 1
 
+// --- Signature release ---
+// Les identifiants de signature sont lus depuis une propriété Gradle
+// (-P… / ~/.gradle/gradle.properties) OU une variable d'environnement
+// (pratique en CI via des secrets). Ils ne doivent jamais être commités.
+// Voir docs/android-signing.md.
+def signingProp = { String name ->
+    project.hasProperty(name) ? project.property(name) : System.getenv(name)
+}
+def releaseStoreFile = signingProp('RELEASE_STORE_FILE')
+def hasReleaseSigning = releaseStoreFile != null && file(releaseStoreFile).exists()
+
 android {
     namespace = "com.localstream.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -31,11 +42,11 @@ android {
     }
     signingConfigs {
         release {
-            if (project.hasProperty('RELEASE_STORE_FILE') && file(project.property('RELEASE_STORE_FILE')).exists()) {
-                storeFile file(project.property('RELEASE_STORE_FILE'))
-                storePassword project.property('RELEASE_STORE_PASSWORD')
-                keyAlias project.property('RELEASE_KEY_ALIAS')
-                keyPassword project.property('RELEASE_KEY_PASSWORD')
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFile)
+                storePassword signingProp('RELEASE_STORE_PASSWORD')
+                keyAlias signingProp('RELEASE_KEY_ALIAS')
+                keyPassword signingProp('RELEASE_KEY_PASSWORD')
             }
         }
     }
@@ -43,9 +54,10 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (project.hasProperty('RELEASE_STORE_FILE') && file(project.property('RELEASE_STORE_FILE')).exists()) {
+            if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             } else {
+                logger.warn("⚠️  Aucune clé de signature release (RELEASE_STORE_FILE) : l'APK release sera signé avec la clé DEBUG, non destinée à la distribution. Voir docs/android-signing.md")
                 signingConfig signingConfigs.debug
             }
         }
