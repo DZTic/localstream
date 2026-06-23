@@ -9,6 +9,7 @@ import { getPopular } from './lib/tmdb';
 import { filterAndSortVideos } from './lib/sorting';
 import { getHeroCandidates } from './lib/hero';
 import { useTmdbMetadata } from './hooks/useTmdbMetadata';
+import { usePlaylists } from './hooks/usePlaylists';
 import { VideoRow } from './components/VideoRow';
 import { BottomNav } from './components/BottomNav';
 
@@ -195,16 +196,16 @@ export default function App() {
   const [playerFeedback, setPlayerFeedback] = useState<{type: 'rewind' | 'forward' | 'pause' | 'play', visible: boolean}>({type: 'pause', visible: false});
   const [searchQuery, setSearchQuery] = useState('');
   
-  const [playlists, setPlaylists] = useState<Playlist[]>(() => {
-    try {
-      const saved = localStorage.getItem('playlists');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const {
+    playlists,
+    selectedPlaylist,
+    setSelectedPlaylist,
+    createPlaylist,
+    toggleVideoInPlaylist,
+    deletePlaylist,
+    removeVideoFromPlaylist,
+  } = usePlaylists();
   const [activeTab, setActiveTab] = useState<'home' | 'playlists' | 'history'>('home');
-  const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
@@ -288,10 +289,6 @@ export default function App() {
   useEffect(() => {
     safeSetItem('watchPositions', JSON.stringify(watchPositions));
   }, [watchPositions]);
-
-  useEffect(() => {
-    safeSetItem('playlists', JSON.stringify(playlists));
-  }, [playlists]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -861,49 +858,10 @@ export default function App() {
     ? heroCandidates[heroIndex % heroCandidates.length]
     : (recentAdditions[0] || groupedVideos[0]);
 
-  const createPlaylist = () => {
-    if (!newPlaylistName.trim()) return;
-    const newPlaylist: Playlist = {
-      id: Date.now().toString(),
-      name: newPlaylistName.trim(),
-      videoNames: infoVideo ? [infoVideo.name] : []
-    };
-    setPlaylists([...playlists, newPlaylist]);
+  // Crée la playlist depuis le champ de saisie, pré-remplie avec la vidéo affichée.
+  const handleCreatePlaylist = () => {
+    createPlaylist(newPlaylistName, infoVideo ? [infoVideo.name] : []);
     setNewPlaylistName('');
-  };
-
-  const toggleVideoInPlaylist = (playlistId: string, videoName: string) => {
-    setPlaylists(playlists.map(p => {
-      if (p.id === playlistId) {
-        const hasVideo = p.videoNames.includes(videoName);
-        return {
-          ...p,
-          videoNames: hasVideo 
-            ? p.videoNames.filter(name => name !== videoName)
-            : [...p.videoNames, videoName]
-        };
-      }
-      return p;
-    }));
-  };
-
-  const deletePlaylist = (playlistId: string) => {
-    setPlaylists(playlists.filter(p => p.id !== playlistId));
-    if (selectedPlaylist?.id === playlistId) {
-      setSelectedPlaylist(null);
-    }
-  };
-
-  const removeVideoFromPlaylist = (playlistId: string, videoName: string) => {
-    setPlaylists(playlists.map(p => {
-      if (p.id === playlistId) {
-        return { ...p, videoNames: p.videoNames.filter(name => name !== videoName) };
-      }
-      return p;
-    }));
-    if (selectedPlaylist?.id === playlistId) {
-      setSelectedPlaylist(prev => prev ? { ...prev, videoNames: prev.videoNames.filter(name => name !== videoName) } : null);
-    }
   };
 
   const handleOpenInfoModal = (video: VideoFile) => {
@@ -1880,10 +1838,10 @@ export default function App() {
                                 onChange={(e) => setNewPlaylistName(e.target.value)}
                                 placeholder="Nouvelle liste..." 
                                 className="flex-1 bg-zinc-900 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:border-red-600 focus:outline-none transition-all placeholder:text-zinc-600"
-                                onKeyDown={(e) => e.key === 'Enter' && createPlaylist()}
+                                onKeyDown={(e) => e.key === 'Enter' && handleCreatePlaylist()}
                               />
-                              <button 
-                                onClick={createPlaylist}
+                              <button
+                                onClick={handleCreatePlaylist}
                                 disabled={!newPlaylistName.trim()}
                                 className="bg-red-600 hover:bg-red-700 disabled:opacity-30 text-white px-4 py-3 rounded-xl text-xs font-black transition-all active:scale-90 shadow-lg shadow-red-900/20"
                               >
